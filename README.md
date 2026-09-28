@@ -2,7 +2,7 @@
 
 > Surface verified professional credentials from Microsoft Learn and Credly in Microsoft 365 profile cards, and make organizational capabilities easier to discover.
 
-![Skills visibility carousel cover](Assets/Carousel/01.png)
+![Skills visibility carousel cover](Assets/Carousel/01.svg)
 
 ## Why this project exists
 
@@ -64,7 +64,7 @@ flowchart LR
 └── Assets/
     └── Carousel/
         ├── README.md
-        └── 01.png ... 09.png
+        └── 01.svg
 ```
 
 ## Prerequisites
