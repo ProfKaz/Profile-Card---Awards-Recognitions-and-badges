@@ -1,8 +1,9 @@
 #requires -Version 7.0
 <#
 .SYNOPSIS
-    Step 2 - Creates and configures the Microsoft 365 People Data Connector
-    using the centralized MSLearnPeopleConnector.json configuration.
+    Step 2 - Creates or reconciles the Microsoft 365 People Data Connector,
+    external schema, profile source, and source precedence using the centralized
+    MSLearnPeopleConnector.json configuration.
 
 .DESCRIPTION
     This script intentionally contains no tenant-specific, application-specific,
@@ -12,13 +13,14 @@
       1. Load Config\MSLearnPeopleConnector.json.
       2. Validate the required configuration contract.
       3. Connect to Microsoft Graph using App-Only authentication.
-      4. Create or validate the People external connection.
-      5. Register the schema from the JSON configuration when the connection is draft.
-      6. Wait for the connection to become ready using configured provisioning values.
-      7. Register the connector as a Microsoft 365 profile source.
-      8. Configure profile source precedence from the JSON configuration.
-      9. Validate the resulting configuration.
-     10. Disconnect Microsoft Graph in all cases.
+      4. Create or reconcile the People external connection.
+      5. Read and compare the current external schema with the JSON configuration.
+      6. Create or update the external schema when differences are detected.
+      7. Wait for schema convergence and a READY connection state.
+      8. Register or validate the connector as a Microsoft 365 profile source.
+      9. Configure profile source precedence from the JSON configuration.
+     10. Validate the resulting connection/schema/profile configuration.
+     11. Disconnect Microsoft Graph in all cases.
 
     This script does NOT ingest users, certifications, badges, externalItems,
     test records, or sample data.
@@ -44,11 +46,21 @@ param(
     [string]$ConfigPath,
 
     [Parameter()]
-    [switch]$SkipModuleInstall
+    [switch]$SkipModuleInstall,
+
+    # Forces a schema PATCH even when the current schema already satisfies the
+    # configured SchemaVersion contract. Normally Step 2 patches only on drift.
+    [Parameter()]
+    [switch]$ForceSchemaUpdate
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+# Step 2 is schema-aware and requires the semantic metadata introduced by Step 0
+# SchemaVersion 2.3.
+$MinimumSupportedSchemaVersionText = "2.3"
+$MinimumSupportedSchemaVersion = [version]$MinimumSupportedSchemaVersionText
 
 # ---------------------------------------------------------------------------
 # Script-local technical dependencies only.
@@ -132,6 +144,347 @@ function Get-ConfigProperty {
     return $Property.Value
 }
 
+function Get-OptionalConfigProperty {
+    param(
+        [Parameter(Mandatory)]
+        $Object,
+
+        [Parameter(Mandatory)]
+        [string]$PropertyName
+    )
+
+    if ($null -eq $Object) {
+        return $null
+    }
+
+    $Property = $Object.PSObject.Properties[$PropertyName]
+
+    if ($null -eq $Property) {
+        return $null
+    }
+
+    return $Property.Value
+}
+
+function Get-BagValue {
+    param(
+        [Parameter(Mandatory)]
+        $Object,
+
+        [Parameter(Mandatory)]
+        [string]$Name
+    )
+
+    if ($Object -is [System.Collections.IDictionary]) {
+        if ($Object.Contains($Name)) {
+            return $Object[$Name]
+        }
+
+        return $null
+    }
+
+    $Property = $Object.PSObject.Properties[$Name]
+
+    if ($null -eq $Property) {
+        return $null
+    }
+
+    return $Property.Value
+}
+
+function Test-BagHasValue {
+    param(
+        [Parameter(Mandatory)]
+        $Object,
+
+        [Parameter(Mandatory)]
+        [string]$Name
+    )
+
+    if ($Object -is [System.Collections.IDictionary]) {
+        return $Object.Contains($Name)
+    }
+
+    return $null -ne $Object.PSObject.Properties[$Name]
+}
+
+function Get-ExternalSchema {
+    param([Parameter(Mandatory)][string]$Id)
+
+    try {
+        $Response =
+            Invoke-MgGraphRequest `
+                -Method GET `
+                -Uri "$($script:ConnectionsUri)/$Id/schema" `
+                -OutputType PSObject `
+                -ErrorAction Stop
+
+        $ValueProperty = $Response.PSObject.Properties["value"]
+
+        if ($null -ne $ValueProperty -and $null -ne $ValueProperty.Value) {
+            return $ValueProperty.Value
+        }
+
+        return $Response
+    }
+    catch {
+        if ($_.Exception.Message -match "404|Not Found") {
+            return $null
+        }
+
+        throw
+    }
+}
+
+function Convert-ActualSchemaPropertyToBody {
+    param([Parameter(Mandatory)]$Property)
+
+    $Body = [ordered]@{
+        name = [string](Get-BagValue -Object $Property -Name "name")
+        type = [string](Get-BagValue -Object $Property -Name "type")
+    }
+
+    foreach ($AttributeName in @(
+        "isSearchable",
+        "isRetrievable",
+        "isQueryable",
+        "isRefinable"
+    )) {
+        if (Test-BagHasValue -Object $Property -Name $AttributeName) {
+            $AttributeValue = Get-BagValue -Object $Property -Name $AttributeName
+
+            if ($null -ne $AttributeValue) {
+                $Body[$AttributeName] = [bool]$AttributeValue
+            }
+        }
+    }
+
+    foreach ($CollectionName in @("labels", "aliases")) {
+        if (Test-BagHasValue -Object $Property -Name $CollectionName) {
+            $CollectionValue = Get-BagValue -Object $Property -Name $CollectionName
+
+            if ($null -ne $CollectionValue) {
+                $Body[$CollectionName] = @($CollectionValue)
+            }
+        }
+    }
+
+    return $Body
+}
+
+function Get-SchemaDifferences {
+    param(
+        [Parameter(Mandatory)]
+        [object[]]$DesiredProperties,
+
+        $ActualSchema
+    )
+
+    $Differences = @()
+
+    if ($null -eq $ActualSchema) {
+        return @("External schema does not exist.")
+    }
+
+    $ActualProperties = @(
+        Get-BagValue -Object $ActualSchema -Name "properties"
+    )
+
+    foreach ($DesiredProperty in $DesiredProperties) {
+        $DesiredName = [string](Get-BagValue -Object $DesiredProperty -Name "name")
+
+        $ActualProperty =
+            @(
+                $ActualProperties |
+                    Where-Object {
+                        [string](Get-BagValue -Object $_ -Name "name") -ieq $DesiredName
+                    }
+            ) |
+            Select-Object -First 1
+
+        if (-not $ActualProperty) {
+            $Differences += "Missing schema property '$DesiredName'."
+            continue
+        }
+
+        $DesiredType = [string](Get-BagValue -Object $DesiredProperty -Name "type")
+        $ActualType = [string](Get-BagValue -Object $ActualProperty -Name "type")
+
+        if ($DesiredType -ine $ActualType) {
+            $Differences += "Property '$DesiredName' type is '$ActualType'; expected '$DesiredType'."
+        }
+
+        if (Test-BagHasValue -Object $DesiredProperty -Name "labels") {
+            $DesiredLabels =
+                @(
+                    Get-BagValue -Object $DesiredProperty -Name "labels" |
+                        ForEach-Object { ([string]$_).ToLowerInvariant() } |
+                        Sort-Object -Unique
+                )
+
+            $ActualLabels =
+                @(
+                    Get-BagValue -Object $ActualProperty -Name "labels" |
+                        ForEach-Object { ([string]$_).ToLowerInvariant() } |
+                        Sort-Object -Unique
+                )
+
+            if (($DesiredLabels -join "|") -ne ($ActualLabels -join "|")) {
+                $Differences += (
+                    "Property '$DesiredName' labels are '$($ActualLabels -join ",")'; " +
+                    "expected '$($DesiredLabels -join ",")'."
+                )
+            }
+        }
+
+        foreach ($AttributeName in @(
+            "isSearchable",
+            "isRetrievable",
+            "isQueryable",
+            "isRefinable"
+        )) {
+            if (Test-BagHasValue -Object $DesiredProperty -Name $AttributeName) {
+                $DesiredValue = [bool](Get-BagValue -Object $DesiredProperty -Name $AttributeName)
+                $ActualRawValue = Get-BagValue -Object $ActualProperty -Name $AttributeName
+
+                if ($null -eq $ActualRawValue -or [bool]$ActualRawValue -ne $DesiredValue) {
+                    $Differences += (
+                        "Property '$DesiredName' $AttributeName is '$ActualRawValue'; " +
+                        "expected '$DesiredValue'."
+                    )
+                }
+            }
+        }
+
+        if (Test-BagHasValue -Object $DesiredProperty -Name "aliases") {
+            $DesiredAliases =
+                @(
+                    Get-BagValue -Object $DesiredProperty -Name "aliases" |
+                        ForEach-Object { ([string]$_).ToLowerInvariant() } |
+                        Sort-Object -Unique
+                )
+
+            $ActualAliases =
+                @(
+                    Get-BagValue -Object $ActualProperty -Name "aliases" |
+                        ForEach-Object { ([string]$_).ToLowerInvariant() } |
+                        Sort-Object -Unique
+                )
+
+            if (($DesiredAliases -join "|") -ne ($ActualAliases -join "|")) {
+                $Differences += (
+                    "Property '$DesiredName' aliases are '$($ActualAliases -join ",")'; " +
+                    "expected '$($DesiredAliases -join ",")'."
+                )
+            }
+        }
+    }
+
+    return @($Differences)
+}
+
+function Merge-SchemaProperties {
+    param(
+        [Parameter(Mandatory)]
+        [object[]]$DesiredProperties,
+
+        $ActualSchema
+    )
+
+    $DesiredByName = @{}
+
+    foreach ($DesiredProperty in $DesiredProperties) {
+        $DesiredName =
+            ([string](Get-BagValue -Object $DesiredProperty -Name "name")).ToLowerInvariant()
+
+        $DesiredByName[$DesiredName] = $DesiredProperty
+    }
+
+    $Merged = @()
+    $IncludedDesiredNames = @{}
+
+    if ($null -ne $ActualSchema) {
+        foreach ($ActualProperty in @(
+            Get-BagValue -Object $ActualSchema -Name "properties"
+        )) {
+            $ActualName =
+                [string](Get-BagValue -Object $ActualProperty -Name "name")
+
+            if ([string]::IsNullOrWhiteSpace($ActualName)) {
+                continue
+            }
+
+            $Key = $ActualName.ToLowerInvariant()
+
+            if ($DesiredByName.ContainsKey($Key)) {
+                $Merged += $DesiredByName[$Key]
+                $IncludedDesiredNames[$Key] = $true
+            }
+            else {
+                # Preserve properties that are already registered but are not owned
+                # by the current Step 0 schema contract.
+                $Merged += Convert-ActualSchemaPropertyToBody -Property $ActualProperty
+            }
+        }
+    }
+
+    foreach ($DesiredProperty in $DesiredProperties) {
+        $DesiredName =
+            ([string](Get-BagValue -Object $DesiredProperty -Name "name")).ToLowerInvariant()
+
+        if (-not $IncludedDesiredNames.ContainsKey($DesiredName)) {
+            $Merged += $DesiredProperty
+        }
+    }
+
+    return @($Merged)
+}
+
+function Wait-ExternalSchemaReady {
+    param(
+        [Parameter(Mandatory)][string]$ConnectionId,
+        [Parameter(Mandatory)][object[]]$DesiredProperties,
+        [Parameter(Mandatory)][int]$TimeoutMinutes,
+        [Parameter(Mandatory)][int]$PollSeconds
+    )
+
+    $Deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+
+    do {
+        Start-Sleep -Seconds $PollSeconds
+
+        $Connection = Get-ExternalConnection -Id $ConnectionId
+        $CurrentSchema = Get-ExternalSchema -Id $ConnectionId
+        $Differences =
+            @(
+                Get-SchemaDifferences `
+                    -DesiredProperties $DesiredProperties `
+                    -ActualSchema $CurrentSchema
+            )
+
+        Write-Host (
+            "Connection state: {0}; schema differences remaining: {1}" -f
+            $Connection.state,
+            $Differences.Count
+        )
+
+        if ($Connection.state -in @("obsolete", "limitExceeded")) {
+            throw "Schema provisioning ended with connection state '$($Connection.state)'."
+        }
+
+        if ($Connection.state -eq "ready" -and $Differences.Count -eq 0) {
+            return $CurrentSchema
+        }
+
+        if ((Get-Date) -ge $Deadline) {
+            throw (
+                "Timeout after $TimeoutMinutes minutes waiting for the external schema " +
+                "to converge to the configured definition."
+            )
+        }
+    } while ($true)
+}
+
 function Resolve-ConfigRelativePath {
     param(
         [Parameter(Mandatory)]
@@ -208,14 +561,25 @@ try {
         throw "Configuration file is not valid JSON: $ConfigPath`n$($_.Exception.Message)"
     }
 
-    $SchemaVersion =
+    $SchemaVersionText =
         [string](Get-ConfigProperty `
             -Object $Config `
             -PropertyName "SchemaVersion" `
             -ConfigPathName "root")
 
-    if ($SchemaVersion -ne "2.2") {
-        throw "Unsupported configuration SchemaVersion '$SchemaVersion'. Step 2 expects SchemaVersion 2.2 generated by Step 0."
+    try {
+        $SchemaVersion = [version]$SchemaVersionText
+    }
+    catch {
+        throw "Configuration SchemaVersion '$SchemaVersionText' is not a valid version value."
+    }
+
+    if ($SchemaVersion -lt $MinimumSupportedSchemaVersion) {
+        throw (
+            "Unsupported configuration SchemaVersion '$SchemaVersionText'. " +
+            "Step 2 requires SchemaVersion $MinimumSupportedSchemaVersionText or later. " +
+            "Run Step 0 to migrate the centralized configuration first."
+        )
     }
 
     # -----------------------------------------------------------------------
@@ -360,10 +724,8 @@ try {
     # Connector schema
     # -----------------------------------------------------------------------
 
-    # SchemaVersion 2.2 stores the schema at the root level. Step 0 currently
-    # defines the two People profile properties used by this solution:
-    #   - Schema.AccountProperty
-    #   - Schema.CertificationProperty
+    # SchemaVersion 2.3 keeps the schema at the root level and allows Step 0
+    # to add new schema property definitions without requiring Step 2 code changes.
 
     $Schema =
         Get-ConfigProperty `
@@ -377,53 +739,121 @@ try {
             -PropertyName "BaseType" `
             -ConfigPathName "Schema")
 
-    $AccountProperty =
-        Get-ConfigProperty `
-            -Object $Schema `
-            -PropertyName "AccountProperty" `
-            -ConfigPathName "Schema"
+    if ($SchemaBaseType -ne "microsoft.graph.externalItem") {
+        throw "Schema.BaseType must be 'microsoft.graph.externalItem'."
+    }
 
-    $CertificationProperty =
-        Get-ConfigProperty `
-            -Object $Schema `
-            -PropertyName "CertificationProperty" `
-            -ConfigPathName "Schema"
+    $SchemaProperties = @()
 
-    $ConfiguredSchemaProperties = @(
-        $AccountProperty
-        $CertificationProperty
-    )
+    foreach ($SchemaEntry in $Schema.PSObject.Properties) {
+        if ($SchemaEntry.Name -eq "BaseType") {
+            continue
+        }
 
-    $SchemaProperties = @(
-        foreach ($Property in $ConfiguredSchemaProperties) {
+        $Property = $SchemaEntry.Value
 
-            $PropertyName =
-                [string](Get-ConfigProperty `
+        if ($null -eq $Property) {
+            throw "Schema.$($SchemaEntry.Name) is null."
+        }
+
+        $PropertyName =
+            [string](Get-ConfigProperty `
+                -Object $Property `
+                -PropertyName "Name" `
+                -ConfigPathName "Schema.$($SchemaEntry.Name)")
+
+        $PropertyType =
+            [string](Get-ConfigProperty `
+                -Object $Property `
+                -PropertyName "Type" `
+                -ConfigPathName "Schema.$($SchemaEntry.Name)")
+
+        $PropertyBody = [ordered]@{
+            name = $PropertyName
+            type = $PropertyType
+        }
+
+        $Labels = Get-OptionalConfigProperty -Object $Property -PropertyName "Labels"
+
+        if ($null -ne $Labels) {
+            $PropertyBody["labels"] = @($Labels)
+        }
+
+        foreach ($AttributeName in @(
+            "IsSearchable",
+            "IsRetrievable",
+            "IsQueryable",
+            "IsRefinable"
+        )) {
+            $AttributeValue =
+                Get-OptionalConfigProperty `
                     -Object $Property `
-                    -PropertyName "Name" `
-                    -ConfigPathName "Schema")
+                    -PropertyName $AttributeName
 
-            $PropertyType =
-                [string](Get-ConfigProperty `
-                    -Object $Property `
-                    -PropertyName "Type" `
-                    -ConfigPathName "Schema")
+            if ($null -ne $AttributeValue) {
+                $GraphAttributeName =
+                    $AttributeName.Substring(0, 1).ToLowerInvariant() +
+                    $AttributeName.Substring(1)
 
-            $Labels =
-                @(
-                    Get-ConfigProperty `
-                        -Object $Property `
-                        -PropertyName "Labels" `
-                        -ConfigPathName "Schema"
-                )
-
-            [ordered]@{
-                name   = $PropertyName
-                type   = $PropertyType
-                labels = $Labels
+                $PropertyBody[$GraphAttributeName] = [bool]$AttributeValue
             }
         }
-    )
+
+        $Aliases =
+            Get-OptionalConfigProperty `
+                -Object $Property `
+                -PropertyName "Aliases"
+
+        if ($null -ne $Aliases) {
+            $PropertyBody["aliases"] = @($Aliases)
+        }
+
+        $SchemaProperties += $PropertyBody
+    }
+
+    if ($SchemaProperties.Count -eq 0) {
+        throw "Schema does not define any external properties."
+    }
+
+    $DuplicateNames =
+        @(
+            $SchemaProperties |
+                Group-Object { [string]$_.name } |
+                Where-Object { $_.Count -gt 1 }
+        )
+
+    if ($DuplicateNames.Count -gt 0) {
+        throw (
+            "Schema contains duplicate property names: " +
+            (($DuplicateNames.Name | Sort-Object) -join ", ")
+        )
+    }
+
+    $ConfiguredLabels =
+        @(
+            $SchemaProperties |
+                ForEach-Object {
+                    @(
+                        Get-BagValue -Object $_ -Name "labels"
+                    )
+                } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } |
+                ForEach-Object { ([string]$_).ToLowerInvariant() } |
+                Sort-Object -Unique
+        )
+
+    foreach ($RequiredLabel in @(
+        "personAccount",
+        "personCertifications",
+        "title",
+        "url",
+        "lastModifiedBy",
+        "lastModifiedDateTime"
+    )) {
+        if ($ConfiguredLabels -notcontains $RequiredLabel.ToLowerInvariant()) {
+            throw "SchemaVersion $SchemaVersionText is missing required semantic label '$RequiredLabel'."
+        }
+    }
 
     $SchemaBody = [ordered]@{
         baseType   = $SchemaBaseType
@@ -434,7 +864,7 @@ try {
     # Profile source
     # -----------------------------------------------------------------------
 
-    # SchemaVersion 2.2 keeps profile-source settings directly under Connector.
+    # SchemaVersion 2.3 keeps profile-source settings directly under Connector.
 
     $ProfileSourceKind =
         [string](Get-ConfigProperty `
@@ -531,7 +961,8 @@ try {
     }
 
     Write-Host "Configuration file : $ConfigPath"
-    Write-Host "Schema version     : $SchemaVersion"
+    Write-Host "Schema version     : $SchemaVersionText"
+    Write-Host "Schema properties  : $($SchemaProperties.Count)"
     Write-Host "Application        : $($Application.DisplayName)"
     Write-Host "Tenant ID          : $TenantId"
     Write-Host "Client ID          : $ClientId"
@@ -633,6 +1064,28 @@ try {
     }
     else {
         Write-Success "External connection already exists."
+
+        $ConnectionPatch = [ordered]@{}
+
+        if ([string]$Connection.name -ne $ConnectionName) {
+            $ConnectionPatch["name"] = $ConnectionName
+        }
+
+        if ([string]$Connection.description -ne $ConnectionDescription) {
+            $ConnectionPatch["description"] = $ConnectionDescription
+        }
+
+        if ($ConnectionPatch.Count -gt 0) {
+            Invoke-MgGraphRequest `
+                -Method PATCH `
+                -Uri "$($script:ConnectionsUri)/$ConnectionId" `
+                -Body ($ConnectionPatch | ConvertTo-Json -Depth 10 -Compress) `
+                -ContentType "application/json" `
+                -ErrorAction Stop |
+                Out-Null
+
+            Write-Success "External connection metadata reconciled."
+        }
     }
 
     $Connection = Get-ExternalConnection -Id $ConnectionId
@@ -653,63 +1106,94 @@ try {
     # Schema
     # -----------------------------------------------------------------------
 
-    Write-Step "STEP 4 - Validate/register configured People Data schema"
+    Write-Step "STEP 4 - Reconcile configured People Data schema"
 
     $Connection = Get-ExternalConnection -Id $ConnectionId
 
-    if ($Connection.state -eq "ready") {
-
-        Write-Success "Connection is already READY. Schema registration is skipped."
-
+    if ($Connection.state -notin @("draft", "ready")) {
+        throw "Unexpected external connection state '$($Connection.state)'."
     }
-    elseif ($Connection.state -eq "draft") {
 
-        Write-Host "Connection is DRAFT. Registering schema from configuration..."
+    $CurrentSchema = Get-ExternalSchema -Id $ConnectionId
+
+    $SchemaDifferences =
+        @(
+            Get-SchemaDifferences `
+                -DesiredProperties $SchemaProperties `
+                -ActualSchema $CurrentSchema
+        )
+
+    if ($SchemaDifferences.Count -eq 0 -and -not $ForceSchemaUpdate) {
+        Write-Success "External schema already matches the configured SchemaVersion contract."
+    }
+    else {
+        if ($ForceSchemaUpdate -and $SchemaDifferences.Count -eq 0) {
+            Write-Warning "ForceSchemaUpdate was specified. Reapplying the configured schema."
+        }
+        else {
+            Write-Host "Schema differences detected:" -ForegroundColor Yellow
+
+            $SchemaDifferences |
+                ForEach-Object {
+                    Write-Host "  - $_" -ForegroundColor Yellow
+                }
+        }
+
+        $MergedSchemaProperties =
+            @(
+                Merge-SchemaProperties `
+                    -DesiredProperties $SchemaProperties `
+                    -ActualSchema $CurrentSchema
+            )
+
+        $SchemaPatchBody = [ordered]@{
+            baseType   = $SchemaBaseType
+            properties = $MergedSchemaProperties
+        }
+
+        Write-Host (
+            "Submitting schema PATCH with {0} property definition(s)..." -f
+            $MergedSchemaProperties.Count
+        )
 
         Invoke-MgGraphRequest `
             -Method PATCH `
             -Uri "$($script:ConnectionsUri)/$ConnectionId/schema" `
-            -Body ($SchemaBody | ConvertTo-Json -Depth 30 -Compress) `
+            -Body ($SchemaPatchBody | ConvertTo-Json -Depth 30 -Compress) `
             -ContentType "application/json" `
             -ErrorAction Stop |
             Out-Null
 
         Write-Host (
-            "Waiting for schema provisioning " +
+            "Waiting for schema convergence " +
             "(timeout $SchemaTimeoutMinutes min, poll every $SchemaPollSeconds sec)..."
         )
 
-        $Deadline =
-            (Get-Date).AddMinutes($SchemaTimeoutMinutes)
+        $CurrentSchema =
+            Wait-ExternalSchemaReady `
+                -ConnectionId $ConnectionId `
+                -DesiredProperties $SchemaProperties `
+                -TimeoutMinutes $SchemaTimeoutMinutes `
+                -PollSeconds $SchemaPollSeconds
 
-        do {
-            Start-Sleep -Seconds $SchemaPollSeconds
-
-            $Connection =
-                Get-ExternalConnection -Id $ConnectionId
-
-            Write-Host "Connection state: $($Connection.state)"
-
-            if ($Connection.state -eq "ready") {
-                break
-            }
-
-            if ($Connection.state -in @("obsolete", "limitExceeded")) {
-                throw "Schema provisioning ended with connection state '$($Connection.state)'."
-            }
-
-            if ((Get-Date) -ge $Deadline) {
-                throw "Timeout after $SchemaTimeoutMinutes minutes waiting for schema provisioning."
-            }
-
-        } while ($true)
-
-        Write-Success "Connector schema provisioned. Connection is READY."
-
+        Write-Success "External schema reconciliation completed. Connection is READY."
     }
-    else {
-        throw "Unexpected external connection state '$($Connection.state)'."
+
+    $FinalSchemaDifferences =
+        @(
+            Get-SchemaDifferences `
+                -DesiredProperties $SchemaProperties `
+                -ActualSchema (Get-ExternalSchema -Id $ConnectionId)
+        )
+
+    if ($FinalSchemaDifferences.Count -gt 0) {
+        throw (
+            "External schema validation failed after reconciliation: " +
+            ($FinalSchemaDifferences -join " | ")
+        )
     }
+
+    Write-Success "Configured schema properties and semantic labels validated."
 
     # -----------------------------------------------------------------------
     # Profile source
@@ -871,6 +1355,23 @@ try {
     $FinalConnection =
         Get-ExternalConnection -Id $ConnectionId
 
+    $FinalSchema =
+        Get-ExternalSchema -Id $ConnectionId
+
+    $FinalSchemaDifferences =
+        @(
+            Get-SchemaDifferences `
+                -DesiredProperties $SchemaProperties `
+                -ActualSchema $FinalSchema
+        )
+
+    if ($FinalSchemaDifferences.Count -gt 0) {
+        throw (
+            "Final schema validation failed: " +
+            ($FinalSchemaDifferences -join " | ")
+        )
+    }
+
     $FinalSources =
         Invoke-MgGraphRequest `
             -Method GET `
@@ -889,6 +1390,12 @@ try {
     $FinalConnection |
         Select-Object id, name, description, contentCategory, state |
         Format-List
+
+    Write-Host "External schema:" -ForegroundColor Cyan
+    Write-Host "  Configured properties : $($SchemaProperties.Count)"
+    Write-Host "  Schema drift           : 0"
+    Write-Host "  Semantic labels        : $($ConfiguredLabels -join ', ')"
+    Write-Host ""
 
     Write-Host "Registered profile source:" -ForegroundColor Cyan
 
