@@ -47,6 +47,11 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# Centralized configuration contract managed by Step 0.
+# Step 0 never downgrades a configuration that is newer than this version.
+$TargetSchemaVersionText = '2.3'
+$TargetSchemaVersion = [version]$TargetSchemaVersionText
+
 if ([string]::IsNullOrWhiteSpace($RootPath)) {
     $RootPath = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
         $PSScriptRoot
@@ -162,7 +167,7 @@ function New-BaseConfiguration {
     $now = (Get-Date).ToUniversalTime().ToString('o')
 
     [ordered]@{
-        SchemaVersion  = '2.2'
+        SchemaVersion  = $TargetSchemaVersionText
         CreatedUtc     = $now
         LastUpdatedUtc = $now
 
@@ -212,15 +217,45 @@ function New-BaseConfiguration {
 
         Schema = [ordered]@{
             BaseType = 'microsoft.graph.externalItem'
+
             AccountProperty = [ordered]@{
                 Name   = 'accountInformation'
                 Type   = 'string'
                 Labels = @('personAccount')
             }
+
             CertificationProperty = [ordered]@{
                 Name   = 'certifications'
                 Type   = 'stringCollection'
                 Labels = @('personCertifications')
+            }
+
+            TitleProperty = [ordered]@{
+                Name          = 'title'
+                Type          = 'string'
+                IsRetrievable = $true
+                Labels        = @('title')
+            }
+
+            UrlProperty = [ordered]@{
+                Name          = 'sourceUrl'
+                Type          = 'string'
+                IsRetrievable = $true
+                Labels        = @('url')
+            }
+
+            LastModifiedByProperty = [ordered]@{
+                Name          = 'lastModifiedBy'
+                Type          = 'string'
+                IsRetrievable = $true
+                Labels        = @('lastModifiedBy')
+            }
+
+            LastModifiedDateTimeProperty = [ordered]@{
+                Name          = 'lastModifiedDateTime'
+                Type          = 'dateTime'
+                IsRetrievable = $true
+                Labels        = @('lastModifiedDateTime')
             }
         }
 
@@ -321,7 +356,7 @@ by Step 0 are preserved.
 
 ## MSLearnPeopleConnector.Template.json
 
-Reference copy of the base SchemaVersion 2.2 configuration.
+Reference copy of the current base SchemaVersion 2.3 configuration.
 '@
 
 $DataReadme = @'
@@ -404,27 +439,174 @@ try {
 
     $baseConfig = New-BaseConfiguration -ProjectRoot $RootPath
 
-    if (-not (Test-Path -LiteralPath $TemplatePath) -or $RefreshDocumentation) {
-        Save-JsonAtomic -Path $TemplatePath -Object $baseConfig
-        Write-Success "Template written: $TemplatePath"
+    # Keep the reference template aligned with the latest configuration contract.
+    # The template contains no operational secrets, so an older template can be
+    # safely refreshed in place.
+    $writeTemplate = $false
+
+    if (-not (Test-Path -LiteralPath $TemplatePath)) {
+        $writeTemplate = $true
+        Write-InfoMessage "Template does not exist and will be created."
+    }
+    elseif ($RefreshDocumentation) {
+        $writeTemplate = $true
+        Write-InfoMessage "Template refresh explicitly requested."
     }
     else {
-        Write-InfoMessage "Template preserved: $TemplatePath"
+        try {
+            $existingTemplate =
+                Get-Content -LiteralPath $TemplatePath -Raw -Encoding utf8 |
+                ConvertFrom-Json -ErrorAction Stop
+
+            $templateVersionText = [string]$existingTemplate.SchemaVersion
+
+            if ([string]::IsNullOrWhiteSpace($templateVersionText)) {
+                $writeTemplate = $true
+                Write-WarnMessage "Template SchemaVersion is missing. The template will be refreshed."
+            }
+            else {
+                $templateVersion = [version]$templateVersionText
+
+                if ($templateVersion -lt $TargetSchemaVersion) {
+                    $writeTemplate = $true
+                    Write-InfoMessage (
+                        "Template SchemaVersion $templateVersionText is older than " +
+                        "$TargetSchemaVersionText and will be refreshed."
+                    )
+                }
+                else {
+                    Write-InfoMessage (
+                        "Template SchemaVersion $templateVersionText is current or newer. Preserving it."
+                    )
+                }
+            }
+        }
+        catch {
+            $writeTemplate = $true
+            Write-WarnMessage (
+                "Template could not be validated and will be refreshed: " +
+                $_.Exception.Message
+            )
+        }
+    }
+
+    if ($writeTemplate) {
+        Save-JsonAtomic -Path $TemplatePath -Object $baseConfig
+        Write-Success "Template written: $TemplatePath"
     }
 
     if (-not (Test-Path -LiteralPath $ConfigPath)) {
         Save-JsonAtomic -Path $ConfigPath -Object $baseConfig
-        Write-Success "Operational configuration created: $ConfigPath"
+        Write-Success (
+            "Operational configuration created with SchemaVersion " +
+            $TargetSchemaVersionText + ": " + $ConfigPath
+        )
     }
     elseif ($ResetConfig) {
         $backup = "$ConfigPath.$(Get-Date -Format 'yyyyMMdd-HHmmss').bak"
         Copy-Item -LiteralPath $ConfigPath -Destination $backup -Force
         Write-WarnMessage "Existing configuration backed up to: $backup"
+
         Save-JsonAtomic -Path $ConfigPath -Object $baseConfig
-        Write-Success "Operational configuration reset: $ConfigPath"
+        Write-Success (
+            "Operational configuration reset to SchemaVersion " +
+            $TargetSchemaVersionText + ": " + $ConfigPath
+        )
     }
     else {
-        Write-InfoMessage "Operational configuration preserved: $ConfigPath"
+        try {
+            $existingConfig =
+                Get-Content -LiteralPath $ConfigPath -Raw -Encoding utf8 |
+                ConvertFrom-Json -ErrorAction Stop
+        }
+        catch {
+            throw (
+                "Existing operational configuration is not valid JSON and was not modified: " +
+                $ConfigPath + [Environment]::NewLine + $_.Exception.Message
+            )
+        }
+
+        $schemaVersionProperty =
+            $existingConfig.PSObject.Properties['SchemaVersion']
+
+        if (
+            $null -eq $schemaVersionProperty -or
+            [string]::IsNullOrWhiteSpace([string]$schemaVersionProperty.Value)
+        ) {
+            throw (
+                "Existing operational configuration does not contain a valid SchemaVersion. " +
+                "The file was not modified: $ConfigPath"
+            )
+        }
+
+        $currentSchemaVersionText =
+            [string]$schemaVersionProperty.Value
+
+        try {
+            $currentSchemaVersion =
+                [version]$currentSchemaVersionText
+        }
+        catch {
+            throw (
+                "Existing operational configuration has an invalid SchemaVersion " +
+                "'$currentSchemaVersionText'. The file was not modified: $ConfigPath"
+            )
+        }
+
+        if ($currentSchemaVersion -lt $TargetSchemaVersion) {
+            $backup = "$ConfigPath.$(Get-Date -Format 'yyyyMMdd-HHmmss').bak"
+            Copy-Item -LiteralPath $ConfigPath -Destination $backup -Force
+            Write-WarnMessage "Existing configuration backed up to: $backup"
+
+            # Migrate only the configuration contract owned by this schema version.
+            # Tenant IDs, application IDs, secrets, connector settings, source
+            # configuration, user mappings and synchronization settings are preserved.
+            $existingConfig.SchemaVersion =
+                $TargetSchemaVersionText
+
+            $lastUpdatedProperty =
+                $existingConfig.PSObject.Properties['LastUpdatedUtc']
+
+            if ($null -eq $lastUpdatedProperty) {
+                $existingConfig |
+                    Add-Member -NotePropertyName 'LastUpdatedUtc' -NotePropertyValue ((Get-Date).ToUniversalTime().ToString('o'))
+            }
+            else {
+                $existingConfig.LastUpdatedUtc =
+                    (Get-Date).ToUniversalTime().ToString('o')
+            }
+
+            $schemaProperty =
+                $existingConfig.PSObject.Properties['Schema']
+
+            if ($null -eq $schemaProperty) {
+                $existingConfig |
+                    Add-Member -NotePropertyName 'Schema' -NotePropertyValue $baseConfig.Schema
+            }
+            else {
+                $existingConfig.Schema =
+                    $baseConfig.Schema
+            }
+
+            Save-JsonAtomic -Path $ConfigPath -Object $existingConfig
+
+            Write-Success (
+                "Operational configuration upgraded from SchemaVersion " +
+                "$currentSchemaVersionText to $TargetSchemaVersionText."
+            )
+        }
+        elseif ($currentSchemaVersion -eq $TargetSchemaVersion) {
+            Write-Success (
+                "Operational configuration already uses SchemaVersion " +
+                "$TargetSchemaVersionText. No schema migration required."
+            )
+        }
+        else {
+            Write-WarnMessage (
+                "Operational configuration SchemaVersion $currentSchemaVersionText is newer than " +
+                "this Step 0 target ($TargetSchemaVersionText). The file was preserved unchanged."
+            )
+        }
     }
 
     Write-Step 'STEP 0.5 - Create data files'
@@ -500,11 +682,28 @@ user@contoso.com,00000000-0000-0000-0000-000000000000,learn-user,public-transcri
 
     $config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
 
-    if ([string]$config.SchemaVersion -eq '2.2') {
-        Write-Success 'Operational configuration JSON validated (SchemaVersion 2.2).'
+    $validatedSchemaVersionText =
+        [string]$config.SchemaVersion
+
+    try {
+        $validatedSchemaVersion =
+            [version]$validatedSchemaVersionText
+    }
+    catch {
+        throw "Operational configuration contains an invalid SchemaVersion '$validatedSchemaVersionText'."
+    }
+
+    if ($validatedSchemaVersion -ge $TargetSchemaVersion) {
+        Write-Success (
+            "Operational configuration JSON validated " +
+            "(SchemaVersion $validatedSchemaVersionText)."
+        )
     }
     else {
-        Write-WarnMessage "Existing configuration preserved with SchemaVersion '$($config.SchemaVersion)'."
+        throw (
+            "Operational configuration validation failed. Expected SchemaVersion " +
+            "$TargetSchemaVersionText or later but found $validatedSchemaVersionText."
+        )
     }
 
     Write-Host ''
