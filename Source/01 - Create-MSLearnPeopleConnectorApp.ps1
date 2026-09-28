@@ -1,8 +1,9 @@
 #requires -Version 7.0
 <#
 .SYNOPSIS
-    STEP 1 - Creates the Microsoft Entra App Registration and Service Principal
-    required by the Microsoft Learn / Credly -> Microsoft 365 People Profile solution.
+    STEP 1 - Creates or validates the Microsoft Entra App Registration and
+    Service Principal required by the Microsoft Learn / Credly -> Microsoft 365
+    People Profile solution.
 
 .DESCRIPTION
     This script is designed to run AFTER:
@@ -15,8 +16,9 @@
 
     Step 1 therefore DOES NOT recreate that JSON. It accepts compatible
     SchemaVersion 2.2 or later configurations, validates the required sections,
-    creates the Entra application objects, and
-    updates only the sections owned by this step:
+    creates new Entra application objects when required, or reuses and reconciles
+    the configured application when it already exists. It updates only the
+    sections owned by this step:
 
         Application
         Authentication
@@ -961,7 +963,7 @@ function Wait-ServicePrincipal {
 
 Write-Host ''
 Write-Host 'Microsoft Learn / Credly -> Microsoft 365 People Profile' -ForegroundColor White
-Write-Host 'STEP 1 - Create Entra App Registration / Service Principal' -ForegroundColor White
+Write-Host 'STEP 1 - Create or Validate Entra App Registration / Service Principal' -ForegroundColor White
 Write-Host 'Centralized configuration merge - SchemaVersion 2.2+' -ForegroundColor DarkGray
 
 try {
