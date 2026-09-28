@@ -588,31 +588,37 @@ function Get-FreshGraphDeviceCodeToken {
         $oauthError = [string]$token.error
         $oauthDescription = [string]$token.error_description
 
-        switch ($oauthError) {
-            'authorization_pending' {
-                continue
-            }
+        # Device Code is a polling protocol. authorization_pending is an expected
+        # response until the administrator finishes the browser sign-in.
+        #
+        # IMPORTANT:
+        # Do not put the polling 'continue' statements inside a PowerShell switch.
+        # In that context, 'continue' applies to switch processing and execution can
+        # then fall through to the generic fatal-error block below. Use explicit
+        # if/elseif checks so 'continue' targets the surrounding while loop.
+        if ($oauthError -eq 'authorization_pending') {
+            continue
+        }
 
-            'slow_down' {
-                $interval += 5
-                continue
-            }
+        if ($oauthError -eq 'slow_down') {
+            $interval += 5
+            continue
+        }
 
-            'authorization_declined' {
-                throw 'The administrator declined the Device Code authentication request.'
-            }
+        if ($oauthError -eq 'authorization_declined') {
+            throw 'The administrator declined the Device Code authentication request.'
+        }
 
-            'access_denied' {
-                throw "Access was denied during Device Code authentication. $oauthDescription"
-            }
+        if ($oauthError -eq 'access_denied') {
+            throw "Access was denied during Device Code authentication. $oauthDescription"
+        }
 
-            'bad_verification_code' {
-                throw 'Microsoft identity platform rejected the Device Code. Run Step 1 again and use the newly generated code.'
-            }
+        if ($oauthError -eq 'bad_verification_code') {
+            throw 'Microsoft identity platform rejected the Device Code. Run Step 1 again and use the newly generated code.'
+        }
 
-            'expired_token' {
-                throw 'The Device Code expired before authentication was completed. Run Step 1 again.'
-            }
+        if ($oauthError -eq 'expired_token') {
+            throw 'The Device Code expired before authentication was completed. Run Step 1 again.'
         }
 
         if ($tokenStatusCode -eq 429 -or $tokenStatusCode -ge 500) {
