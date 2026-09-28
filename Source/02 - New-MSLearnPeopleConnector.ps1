@@ -337,25 +337,10 @@ function Get-SchemaDifferences {
             }
         }
 
-        foreach ($AttributeName in @(
-            "isSearchable",
-            "isRetrievable",
-            "isQueryable",
-            "isRefinable"
-        )) {
-            if (Test-BagHasValue -Object $DesiredProperty -Name $AttributeName) {
-                $DesiredValue = [bool](Get-BagValue -Object $DesiredProperty -Name $AttributeName)
-                $ActualRawValue = Get-BagValue -Object $ActualProperty -Name $AttributeName
-
-                if ($null -eq $ActualRawValue -or [bool]$ActualRawValue -ne $DesiredValue) {
-                    $Differences += (
-                        "Property '$DesiredName' $AttributeName is '$ActualRawValue'; " +
-                        "expected '$DesiredValue'."
-                    )
-                }
-            }
-        }
-
+        # People Data Connectors ignore isQueryable, isRefinable, isRetrievable,
+        # and isSearchable because all person data is indexed by default. Step 2
+        # can submit these attributes when present in configuration, but schema
+        # convergence must not depend on Graph returning them.
         if (Test-BagHasValue -Object $DesiredProperty -Name "aliases") {
             $DesiredAliases =
                 @(
@@ -1036,7 +1021,7 @@ try {
     # Connection
     # -----------------------------------------------------------------------
 
-    Write-Step "STEP 3 - Create or validate the People external connection"
+    Write-Step "STEP 3 - Create or reconcile the People external connection"
 
     $Connection = Get-ExternalConnection -Id $ConnectionId
 
