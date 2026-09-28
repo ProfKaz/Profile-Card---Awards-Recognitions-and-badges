@@ -105,9 +105,16 @@ param(
     [Parameter()]
     [string]$TargetTenantId,
 
-    # Allows creation when another application with the same display name exists.
+    # Allows creation of a NEW application even when another application with the
+    # same display name already exists. By default Step 1 reuses the application
+    # already referenced by Application.ClientId or a single exact-name match.
     [Parameter()]
-    [switch]$AllowDuplicateAppName
+    [switch]$AllowDuplicateAppName,
+
+    # Intentionally creates a new client secret for an existing application.
+    # Without this switch, a valid configured secret is preserved and reused.
+    [Parameter()]
+    [switch]$RotateClientSecret
 )
 
 Set-StrictMode -Version Latest
@@ -770,7 +777,7 @@ function Connect-FreshGraphSession {
             })
         )
 
-        $confirm = Read-Host 'Continue and create the application in THIS tenant? [Y/N]'
+        $confirm = Read-Host 'Continue with Step 1 in THIS tenant? [Y/N]'
 
         if ($confirm -match '^(Y|YES|S|SI|SÍ)$') {
             return [PSCustomObject]@{
@@ -782,9 +789,7 @@ function Connect-FreshGraphSession {
 
         Write-WarnMessage 'Authentication context rejected. No changes have been made.'
         Clear-GraphConnection
-
-        # Do not silently reuse the rejected tenant on the next attempt.
-        $RequestedTenant = $null
+        return $null
     }
 }
 
@@ -832,6 +837,91 @@ function Get-AdminConsentUrl {
     )
 
     return "https://login.microsoftonline.com/$TenantId/adminconsent?client_id=$AppId"
+}
+
+function Merge-ApplicationRequiredResourceAccess {
+    param(
+        [Parameter(Mandatory)]$Application,
+        [Parameter(Mandatory)][string]$ResourceAppId,
+        [Parameter(Mandatory)][object[]]$RequiredRoles
+    )
+
+    $MergedEntries = @()
+    $GraphEntryFound = $false
+    $Changed = $false
+    $AddedPermissions = @()
+
+    foreach ($ExistingEntry in @($Application.RequiredResourceAccess)) {
+        if ($null -eq $ExistingEntry) {
+            continue
+        }
+
+        $ExistingResourceAppId = [string]$ExistingEntry.ResourceAppId
+        $MergedAccess = @(
+            foreach ($Access in @($ExistingEntry.ResourceAccess)) {
+                if ($null -eq $Access) {
+                    continue
+                }
+
+                @{
+                    Id   = [Guid]$Access.Id
+                    Type = [string]$Access.Type
+                }
+            }
+        )
+
+        if ($ExistingResourceAppId -eq $ResourceAppId) {
+            $GraphEntryFound = $true
+
+            foreach ($Role in $RequiredRoles) {
+                $Exists = @(
+                    $MergedAccess |
+                        Where-Object {
+                            [string]$_.Id -eq [string]$Role.Id -and
+                            [string]$_.Type -eq 'Role'
+                        }
+                ).Count -gt 0
+
+                if (-not $Exists) {
+                    $MergedAccess += @{
+                        Id   = [Guid]$Role.Id
+                        Type = 'Role'
+                    }
+
+                    $AddedPermissions += [string]$Role.Name
+                    $Changed = $true
+                }
+            }
+        }
+
+        $MergedEntries += @{
+            ResourceAppId  = $ExistingResourceAppId
+            ResourceAccess = $MergedAccess
+        }
+    }
+
+    if (-not $GraphEntryFound) {
+        $MergedEntries += @{
+            ResourceAppId  = $ResourceAppId
+            ResourceAccess = @(
+                foreach ($Role in $RequiredRoles) {
+                    @{
+                        Id   = [Guid]$Role.Id
+                        Type = 'Role'
+                    }
+                }
+            )
+        }
+
+        $AddedPermissions = @($RequiredRoles | ForEach-Object { [string]$_.Name })
+        $Changed = $true
+    }
+
+    return [PSCustomObject]@{
+        Changed                = $Changed
+        AddedPermissions       = [string[]]$AddedPermissions
+        RequiredResourceAccess = $MergedEntries
+    }
 }
 
 function Wait-ServicePrincipal {
@@ -1046,6 +1136,11 @@ try {
 
     $authContext = Connect-FreshGraphSession -RequestedTenant $TargetTenantId
 
+    if (-not $authContext) {
+        Write-WarnMessage 'Step 1 was cancelled by the operator. No tenant changes were made.'
+        return
+    }
+
     $TenantId = $authContext.TenantId
     $AdminAccount = $authContext.Account
 
@@ -1116,59 +1211,147 @@ Use the intended project/configuration or reset the deployment intentionally.
     )
 
     # -------------------------------------------------------------------------
-    # STEP 1.5 - Duplicate check
+    # STEP 1.5 - Resolve existing App Registration or determine creation path
     # -------------------------------------------------------------------------
 
-    Write-Step 'STEP 1.5 - Check for an existing App Registration'
+    Write-Step 'STEP 1.5 - Resolve App Registration'
 
-    if (-not $AllowDuplicateAppName) {
+    $ConfiguredClientId = [string](
+        Get-OptionalPropertyValue `
+            -Object $config.Application `
+            -Name 'ClientId'
+    )
+
+    $app = $null
+    $UsingExistingApplication = $false
+
+    if (
+        -not $AllowDuplicateAppName -and
+        -not [string]::IsNullOrWhiteSpace($ConfiguredClientId)
+    ) {
+        Write-InfoMessage "Resolving configured Application.ClientId: $ConfiguredClientId"
+
+        $app =
+            Get-MgApplication `
+                -Filter "appId eq '$ConfiguredClientId'" `
+                -Property 'Id,AppId,DisplayName,RequiredResourceAccess,PasswordCredentials' `
+                -ErrorAction Stop |
+            Select-Object -First 1
+
+        if (-not $app) {
+            throw @"
+The centralized configuration references Application.ClientId
+'$ConfiguredClientId', but that App Registration was not found in tenant '$TenantId'.
+
+Step 1 will not silently create a replacement application because doing so could
+disconnect the existing connector configuration. Correct the configuration or
+remove the stale Application.ClientId intentionally before retrying.
+"@
+        }
+
+        $UsingExistingApplication = $true
+        Write-Success 'Configured App Registration found.'
+    }
+    elseif (-not $AllowDuplicateAppName) {
         $escapedDisplayName = $DisplayName.Replace("'", "''")
 
         $existingApps = @(
             Get-MgApplication `
                 -Filter "displayName eq '$escapedDisplayName'" `
-                -Property 'Id,AppId,DisplayName' `
+                -Property 'Id,AppId,DisplayName,RequiredResourceAccess,PasswordCredentials' `
                 -ErrorAction Stop
         )
 
-        if ($existingApps.Count -gt 0) {
-            Write-WarnMessage "An App Registration named '$DisplayName' already exists in tenant '$TenantId'."
+        if ($existingApps.Count -eq 1) {
+            $app = $existingApps[0]
+            $UsingExistingApplication = $true
 
+            Write-WarnMessage (
+                "Application.ClientId is empty, but one exact App Registration match " +
+                "was found for '$DisplayName'. Step 1 will reuse it."
+            )
+        }
+        elseif ($existingApps.Count -gt 1) {
             $existingApps |
                 Format-Table DisplayName, AppId, Id -AutoSize
 
             throw @"
-No application was created.
+Multiple App Registrations named '$DisplayName' were found.
 
-If the duplicate is intentional, rerun Step 1 with -AllowDuplicateAppName.
-Otherwise, use the existing application intentionally or remove/rename the
-conflicting application before retrying.
+Set Application.ClientId in the centralized configuration to the intended
+application, or use -AllowDuplicateAppName only when creating another
+application is intentional.
 "@
         }
     }
 
-    Write-Success 'No conflicting App Registration was found.'
-
     # -------------------------------------------------------------------------
-    # STEP 1.6 - Create App Registration
+    # STEP 1.6 - Create or reconcile App Registration
     # -------------------------------------------------------------------------
 
-    Write-Step 'STEP 1.6 - Create App Registration'
+    Write-Step 'STEP 1.6 - Create or validate App Registration'
 
-    $app = New-MgApplication `
-        -DisplayName $DisplayName `
-        -SignInAudience 'AzureADMyOrg' `
-        -RequiredResourceAccess $requiredResourceAccess `
-        -ErrorAction Stop
+    if (-not $app) {
+        $app = New-MgApplication `
+            -DisplayName $DisplayName `
+            -SignInAudience 'AzureADMyOrg' `
+            -RequiredResourceAccess $requiredResourceAccess `
+            -ErrorAction Stop
 
-    if (-not $app -or -not $app.AppId) {
-        throw 'The App Registration could not be created.'
+        if (-not $app -or -not $app.AppId) {
+            throw 'The App Registration could not be created.'
+        }
+
+        $AppObjectId = [string]$app.Id
+        $AppId = [string]$app.AppId
+
+        Write-Success 'Application created.'
+    }
+    else {
+        $AppObjectId = [string]$app.Id
+        $AppId = [string]$app.AppId
+
+        if ([string]$app.DisplayName -ne $DisplayName) {
+            Write-WarnMessage (
+                "Configured application display name '$DisplayName' differs from the " +
+                "actual App Registration name '$($app.DisplayName)'. Using the existing application."
+            )
+
+            $DisplayName = [string]$app.DisplayName
+        }
+
+        $PermissionMerge =
+            Merge-ApplicationRequiredResourceAccess `
+                -Application $app `
+                -ResourceAppId $GraphAppId `
+                -RequiredRoles $resolvedRoles
+
+        if ($PermissionMerge.Changed) {
+            Write-Host 'Adding missing Microsoft Graph application permissions:' -ForegroundColor Cyan
+
+            $PermissionMerge.AddedPermissions |
+                ForEach-Object {
+                    Write-Host "  - $_"
+                }
+
+            Update-MgApplication `
+                -ApplicationId $AppObjectId `
+                -RequiredResourceAccess $PermissionMerge.RequiredResourceAccess `
+                -ErrorAction Stop
+
+            Write-Success 'Existing App Registration permissions reconciled.'
+
+            $app =
+                Get-MgApplication `
+                    -ApplicationId $AppObjectId `
+                    -Property 'Id,AppId,DisplayName,RequiredResourceAccess,PasswordCredentials' `
+                    -ErrorAction Stop
+        }
+        else {
+            Write-Success 'Existing App Registration already contains all required Microsoft Graph permissions.'
+        }
     }
 
-    $AppObjectId = [string]$app.Id
-    $AppId = [string]$app.AppId
-
-    Write-Success 'Application created.'
     Write-Host "  Display Name          : $DisplayName"
     Write-Host "  Application (Client)  : $AppId"
     Write-Host "  Application Object ID : $AppObjectId"
@@ -1177,32 +1360,24 @@ conflicting application before retrying.
     # STEP 1.7 - Create Service Principal
     # -------------------------------------------------------------------------
 
-    Write-Step 'STEP 1.7 - Create Service Principal'
+    Write-Step 'STEP 1.7 - Create or validate Service Principal'
 
-    $servicePrincipal = $null
+    $servicePrincipal = Wait-ServicePrincipal -AppId $AppId -Attempts 1 -DelaySeconds 1
 
-    try {
-        $servicePrincipal = New-MgServicePrincipal `
-            -AppId $AppId `
-            -ErrorAction Stop
+    if ($servicePrincipal) {
+        Write-Success 'Existing Service Principal found.'
     }
-    catch {
-        Write-WarnMessage 'Initial Service Principal creation did not complete immediately. Checking Entra replication...'
-    }
-
-    if (-not $servicePrincipal) {
-        $servicePrincipal = Wait-ServicePrincipal -AppId $AppId
-    }
-
-    if (-not $servicePrincipal) {
-        Start-Sleep -Seconds 5
-
+    else {
         try {
             $servicePrincipal = New-MgServicePrincipal `
                 -AppId $AppId `
                 -ErrorAction Stop
         }
         catch {
+            Write-WarnMessage 'Service Principal creation did not complete immediately. Checking Entra replication...'
+        }
+
+        if (-not $servicePrincipal) {
             $servicePrincipal = Wait-ServicePrincipal -AppId $AppId
         }
     }
@@ -1215,35 +1390,86 @@ conflicting application before retrying.
     Write-Success "Service Principal ready: $ServicePrincipalId"
 
     # -------------------------------------------------------------------------
-    # STEP 1.8 - Create secret + persist immediately
+    # STEP 1.8 - Validate/reuse or intentionally rotate client secret
     # -------------------------------------------------------------------------
 
-    Write-Step 'STEP 1.8 - Create Client Secret'
+    Write-Step 'STEP 1.8 - Validate Client Secret'
 
-    $secretStart = (Get-Date).ToUniversalTime()
-    $secretEnd = $secretStart.AddMonths($SecretValidityMonths)
+    $ConfiguredClientSecret = [string](
+        Get-OptionalPropertyValue -Object $config.Authentication -Name 'ClientSecret'
+    )
 
-    $passwordCredential = @{
-        DisplayName   = 'MSLearn-People-Connector-Secret'
-        StartDateTime = $secretStart
-        EndDateTime   = $secretEnd
+    $ConfiguredSecretKeyId = [string](
+        Get-OptionalPropertyValue -Object $config.Authentication -Name 'SecretKeyId'
+    )
+
+    $MatchingPasswordCredential = $null
+
+    if (-not [string]::IsNullOrWhiteSpace($ConfiguredSecretKeyId)) {
+        $MatchingPasswordCredential =
+            @(
+                $app.PasswordCredentials |
+                    Where-Object {
+                        [string]$_.KeyId -eq $ConfiguredSecretKeyId
+                    }
+            ) |
+            Select-Object -First 1
     }
 
-    $secretResult = Add-MgApplicationPassword `
-        -ApplicationId $AppObjectId `
-        -PasswordCredential $passwordCredential `
-        -ErrorAction Stop
+    $CanReuseConfiguredSecret =
+        $UsingExistingApplication -and
+        (-not $RotateClientSecret) -and
+        (-not [string]::IsNullOrWhiteSpace($ConfiguredClientSecret)) -and
+        (-not [string]::IsNullOrWhiteSpace($ConfiguredSecretKeyId)) -and
+        ($null -ne $MatchingPasswordCredential) -and
+        ($null -ne $MatchingPasswordCredential.EndDateTime) -and
+        ([datetimeoffset]$MatchingPasswordCredential.EndDateTime -gt [datetimeoffset]::UtcNow)
 
-    if (-not $secretResult.SecretText) {
-        throw 'The client secret was created but its value was not returned.'
+    if ($CanReuseConfiguredSecret) {
+        $ClientSecret = $ConfiguredClientSecret
+        $SecretKeyId = $ConfiguredSecretKeyId
+        $secretEnd = ([datetimeoffset]$MatchingPasswordCredential.EndDateTime).UtcDateTime
+
+        Write-Success 'Configured client secret is still present and valid. Reusing it.'
+        Write-Host "  Secret expiration UTC : $($secretEnd.ToString('yyyy-MM-dd HH:mm:ss'))"
+        Write-InfoMessage 'Use -RotateClientSecret only when an intentional secret replacement is required.'
     }
+    else {
+        if ($UsingExistingApplication -and -not $RotateClientSecret) {
+            Write-WarnMessage (
+                'The existing application cannot safely reuse the configured client secret. ' +
+                'A new secret will be created and stored in the centralized configuration.'
+            )
+        }
+        elseif ($RotateClientSecret) {
+            Write-WarnMessage 'Client secret rotation was explicitly requested.'
+        }
 
-    $ClientSecret = [string]$secretResult.SecretText
-    $SecretKeyId = [string]$secretResult.KeyId
+        $secretStart = (Get-Date).ToUniversalTime()
+        $secretEnd = $secretStart.AddMonths($SecretValidityMonths)
 
-    Write-Success 'Client secret created.'
-    Write-Host "  Secret expiration UTC : $($secretEnd.ToString('yyyy-MM-dd HH:mm:ss'))"
-    Write-WarnMessage 'The secret value can only be retrieved at creation time.'
+        $passwordCredential = @{
+            DisplayName   = 'MSLearn-People-Connector-Secret'
+            StartDateTime = $secretStart
+            EndDateTime   = $secretEnd
+        }
+
+        $secretResult = Add-MgApplicationPassword `
+            -ApplicationId $AppObjectId `
+            -PasswordCredential $passwordCredential `
+            -ErrorAction Stop
+
+        if (-not $secretResult.SecretText) {
+            throw 'The client secret was created but its value was not returned.'
+        }
+
+        $ClientSecret = [string]$secretResult.SecretText
+        $SecretKeyId = [string]$secretResult.KeyId
+
+        Write-Success 'Client secret created.'
+        Write-Host "  Secret expiration UTC : $($secretEnd.ToString('yyyy-MM-dd HH:mm:ss'))"
+        Write-WarnMessage 'The secret value can only be retrieved at creation time.'
+    }
 
     $AppPortalUrl = Get-AppPortalUrl -AppId $AppId
     $ApiPermissionsPortalUrl = Get-ApiPermissionsPortalUrl -AppId $AppId
@@ -1456,7 +1682,7 @@ conflicting application before retrying.
 
     Write-Host ''
     Write-WarnMessage 'Authentication.ClientSecret is currently stored in clear text in the centralized JSON.'
-    Write-Host 'Next step: run Step 2 to create/validate the People Data Connector and schema.' -ForegroundColor Cyan
+    Write-Host 'Next step: run Step 2 to reconcile the People Data Connector and external schema.' -ForegroundColor Cyan
 }
 catch {
     Write-Host ''
