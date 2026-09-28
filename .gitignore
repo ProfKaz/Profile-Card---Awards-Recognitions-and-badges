@@ -1,0 +1,27 @@
+# Operational configuration and secrets
+**/Config/MSLearnPeopleConnector.json
+**/Config/*.bak
+**/Config/*.tmp
+
+# Operational user mappings
+**/Data/CredentialUsers.csv
+**/Data/CredentialUsers.json
+
+# Logs and reports
+**/Logs/*
+**/Reports/*
+*.log
+
+# PowerShell / temporary artifacts
+*.clixml
+*.tmp
+*.bak
+
+# Local editor / OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Keep published support samples
+!Support/MSLearnPeopleConnector.sample.json
