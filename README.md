@@ -1,0 +1,159 @@
+# Microsoft 365 Profile Card – Awards, Recognitions and Badges
+
+> Surface verified professional credentials from Microsoft Learn and Credly in Microsoft 365 profile cards, and make organizational capabilities easier to discover.
+
+![Skills visibility carousel cover](Assets/Carousel/01.png)
+
+## Why this project exists
+
+Microsoft 365 can display awards and certification badges directly on a user's profile card when an organization configures an appropriate profile data source. Once published, this information can also improve people discovery scenarios across Microsoft 365, including Microsoft 365 Copilot.
+
+This project provides a PowerShell-based reference implementation that creates a **Microsoft 365 People Data Connector** and synchronizes professional credentials from:
+
+- **Microsoft Learn** – active Microsoft certifications exposed through a shared/public Learn profile and transcript.
+- **Credly** – public and accepted badges, awards and recognitions within a configurable rolling window. The default used by this project is **12 months**.
+
+The objective is not simply to display badges. It is to build a more current, searchable inventory of demonstrated capabilities that can support staffing, service delivery, proposal preparation, internal expertise discovery and Copilot-assisted people search.
+
+## What the solution does
+
+The implementation:
+
+1. Initializes a reusable local project structure and validates PowerShell prerequisites.
+2. Creates a Microsoft Entra application and service principal with the Microsoft Graph application permissions required by the connector.
+3. Creates and configures a Microsoft 365 People Data Connector with `contentCategory = people`.
+4. Registers the connector as a Microsoft 365 profile source and configures profile source precedence.
+5. Maps the connector schema to the Microsoft 365 people profile using:
+   - `personAccount`
+   - `personCertifications`
+6. Reads enabled users from a controlled input source.
+7. Retrieves active Microsoft Learn certifications and recent Credly badges.
+8. Deduplicates overlapping credentials, preserves unmanaged profile entries, and optionally removes stale credentials managed by this solution.
+9. Produces execution logs and structured synchronization reports.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    A[Microsoft Learn] --> D[PowerShell synchronization]
+    B[Credly public profile] --> D
+    C[Controlled user mapping] --> D
+    D --> E[Microsoft Graph external connection]
+    E --> F[People Data Connector<br/>contentCategory = people]
+    F --> G[Microsoft 365 profile source]
+    G --> H[Profile Card]
+    G --> I[Microsoft 365 Copilot]
+    G --> J[People Search / People experiences]
+```
+
+## Repository structure
+
+```text
+.
+├── README.md
+├── .gitignore
+├── Source/
+│   ├── README.md
+│   ├── 00 - Initialize-MSLearnPeopleConnector.ps1
+│   ├── 01 - Create-MSLearnPeopleConnectorApp.ps1
+│   ├── 02 - New-MSLearnPeopleConnector.ps1
+│   └── 03 - Sync-MSLearnCredlyPeopleProfiles.ps1
+├── Support/
+│   ├── README.md
+│   └── MSLearnPeopleConnector.sample.json
+└── Assets/
+    └── Carousel/
+        ├── README.md
+        └── 01.png ... 09.png
+```
+
+## Prerequisites
+
+- **PowerShell 7 or later**.
+- A Microsoft 365 tenant where the administrator can configure Microsoft 365 People Data Connectors.
+- Permissions to create an Entra application/service principal and grant tenant-wide admin consent.
+- Target users that can be matched to Microsoft Entra ID and have the required Microsoft 365 profile/mailbox prerequisites.
+- Microsoft Learn profile/transcript sharing enabled for users whose Learn credentials will be synchronized.
+- A public Credly profile for users whose recent public badges will be synchronized.
+
+The Step 0 script validates the Microsoft Graph PowerShell modules required by the solution and can install missing modules for the current user.
+
+## Recommended deployment model
+
+The `Source` folder is a distribution folder. Keep it clean.
+
+Copy the four scripts into a dedicated operational folder before running them, for example:
+
+```text
+C:\MyDev\MSLearn
+```
+
+The scripts then create and use the local operational folders `Config`, `Data`, `Logs` and `Reports`.
+
+## Quick start
+
+Run the scripts in this order from the operational working folder:
+
+```powershell
+& '.\00 - Initialize-MSLearnPeopleConnector.ps1'
+& '.\01 - Create-MSLearnPeopleConnectorApp.ps1'
+& '.\02 - New-MSLearnPeopleConnector.ps1'
+& '.\03 - Sync-MSLearnCredlyPeopleProfiles.ps1'
+```
+
+Before Step 3, populate the generated user mapping file:
+
+```text
+Data\CredentialUsers.csv
+```
+
+Expected columns:
+
+```text
+UserPrincipalName,EntraObjectId,LearnUserName,TranscriptId,CredlyUser,Enabled
+```
+
+See [Source/README.md](Source/README.md) for the purpose of each script and [Support/README.md](Support/README.md) for the configuration model.
+
+## Security and privacy
+
+This project intentionally does **not** publish a live tenant configuration.
+
+The sample configuration in `Support` contains no tenant ID, application/client ID, service principal ID, client secret or user data.
+
+During the current proof-of-concept workflow, Step 1 can store a client secret in the local operational JSON configuration. Treat that file as sensitive. Do not commit it to source control. For production deployments, prefer stronger secret handling such as certificate-based authentication, managed identity where applicable, or protected secret storage.
+
+People Data Connector information is organization-visible profile data. Only ingest professional information that your organization is authorized to expose internally.
+
+## Important implementation notes
+
+- The default Credly rolling window is **12 months**. This is a project configuration choice, not a Microsoft 365 limitation.
+- Microsoft Learn and Credly retrieval in this reference implementation relies on publicly accessible web endpoints. These endpoints should not be treated as contractual enterprise APIs and can change.
+- Newly ingested people data can require time to propagate into Microsoft 365 profile experiences.
+- Microsoft 365 remains the presentation layer. Credential visibility and correctness should continue to be managed at the authoritative source whenever possible.
+- This repository is a community/reference implementation and is not an official Microsoft or Credly product.
+
+## Microsoft documentation
+
+- [View awards and certification badges on your profile card](https://support.microsoft.com/en-us/office/view-awards-and-certification-badges-on-your-profile-card)
+- [Microsoft 365 Copilot connectors for people data](https://learn.microsoft.com/en-us/graph/peopleconnectors)
+- [Build Microsoft 365 Copilot connectors for people data](https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/build-connectors-with-people-data)
+- [Manage profile source precedence in Microsoft 365](https://learn.microsoft.com/en-us/graph/profilepriority-configure-profilepropertysetting)
+- [People data sources in Microsoft 365](https://learn.microsoft.com/en-us/graph/people-data-sources)
+- [Microsoft Graph connectors API overview](https://learn.microsoft.com/en-us/graph/connecting-external-content-connectors-api-overview)
+- [Sharing Microsoft Credentials and Microsoft Learn transcripts](https://learn.microsoft.com/en-us/credentials/certifications/view-use-share-certificates-badges)
+
+## Example discovery scenarios
+
+Once the profile data is available and indexed in Microsoft 365, organizations can build discovery workflows around questions such as:
+
+- Who currently holds a specific Microsoft certification?
+- Which consultants have recent data security, AI, cloud or networking badges?
+- Who can support a delivery that requires a particular verified capability?
+- Which teams have certification gaps for an upcoming service or customer requirement?
+
+Actual Microsoft 365 Copilot behavior depends on tenant configuration, licensing, permissions, indexing and the quality of the published profile data.
+
+## Visual assets
+
+The nine-slide carousel in [Assets/Carousel](Assets/Carousel) explains the business problem and the solution at a high level. It can be reused when presenting the project internally or introducing the concept to a broader technical audience.
