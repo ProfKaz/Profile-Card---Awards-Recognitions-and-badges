@@ -48,7 +48,7 @@
     Sync-MSLearnCredlyPeopleProfiles-v1.ps1 while externalizing configuration.
 
 .CONFIGURATION
-    Expected SchemaVersion: 2.2 or later.
+    Expected SchemaVersion: 2.3 or later.
 
     Default path:
       .\Config\MSLearnPeopleConnector.json
@@ -72,6 +72,10 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+# Step 3 publishes properties introduced by the SchemaVersion 2.3 contract.
+$MinimumSupportedSchemaVersionText = "2.3"
+$MinimumSupportedSchemaVersion = [version]$MinimumSupportedSchemaVersionText
 
 # ---------------------------------------------------------------------------
 # Technical dependencies only.
@@ -183,6 +187,152 @@ function Get-OptionalPropertyValue {
     }
 
     return $Property.Value
+}
+
+function Get-SchemaPropertyByLabel {
+    param(
+        [Parameter(Mandatory)]
+        $Schema,
+
+        [Parameter(Mandatory)]
+        [string]$Label
+    )
+
+    foreach ($SchemaEntry in $Schema.PSObject.Properties) {
+        if ($SchemaEntry.Name -eq "BaseType") {
+            continue
+        }
+
+        $Candidate = $SchemaEntry.Value
+
+        if ($null -eq $Candidate) {
+            continue
+        }
+
+        $Labels =
+            @(
+                Get-OptionalPropertyValue `
+                    -Object $Candidate `
+                    -Name "Labels"
+            )
+
+        if (
+            @(
+                $Labels |
+                    Where-Object {
+                        ([string]$_).Equals(
+                            $Label,
+                            [System.StringComparison]::OrdinalIgnoreCase
+                        )
+                    }
+            ).Count -gt 0
+        ) {
+            return $Candidate
+        }
+    }
+
+    return $null
+}
+
+function Get-ExternalSchema {
+    param([Parameter(Mandatory)][string]$ConnectionUri)
+
+    $Response =
+        Invoke-MgGraphRequest `
+            -Method GET `
+            -Uri "$ConnectionUri/schema" `
+            -Headers @{
+                Prefer = "include-unknown-enum-members"
+            } `
+            -OutputType PSObject `
+            -ErrorAction Stop
+
+    $ValueProperty =
+        $Response.PSObject.Properties["value"]
+
+    if ($null -ne $ValueProperty -and $null -ne $ValueProperty.Value) {
+        return $ValueProperty.Value
+    }
+
+    return $Response
+}
+
+function Test-ExternalSchemaContract {
+    param(
+        [Parameter(Mandatory)]
+        $ExternalSchema,
+
+        [Parameter(Mandatory)]
+        [object[]]$ExpectedProperties
+    )
+
+    $ActualProperties =
+        @(
+            Get-OptionalPropertyValue `
+                -Object $ExternalSchema `
+                -Name "properties"
+        )
+
+    $Errors = @()
+
+    foreach ($ExpectedProperty in $ExpectedProperties) {
+        $ExpectedName =
+            [string](Get-RequiredPropertyValue `
+                -Object $ExpectedProperty `
+                -Name "Name" `
+                -Path "Schema")
+
+        $ExpectedType =
+            [string](Get-RequiredPropertyValue `
+                -Object $ExpectedProperty `
+                -Name "Type" `
+                -Path "Schema")
+
+        $ActualProperty =
+            @(
+                $ActualProperties |
+                    Where-Object {
+                        $ActualName =
+                            [string](
+                                Get-OptionalPropertyValue `
+                                    -Object $_ `
+                                    -Name "name"
+                            )
+
+                        $ActualName.Equals(
+                            $ExpectedName,
+                            [System.StringComparison]::OrdinalIgnoreCase
+                        )
+                    }
+            ) |
+            Select-Object -First 1
+
+        if (-not $ActualProperty) {
+            $Errors += "Missing external schema property '$ExpectedName'."
+            continue
+        }
+
+        $ActualType =
+            [string](
+                Get-OptionalPropertyValue `
+                    -Object $ActualProperty `
+                    -Name "type"
+            )
+
+        if (
+            -not $ActualType.Equals(
+                $ExpectedType,
+                [System.StringComparison]::OrdinalIgnoreCase
+            )
+        ) {
+            $Errors += (
+                "External schema property '$ExpectedName' has type '$ActualType'; " +
+                "expected '$ExpectedType'."
+            )
+        }
+    }
+
+    return @($Errors)
 }
 
 function Resolve-ConfiguredPath {
@@ -1258,6 +1408,21 @@ function Convert-LearnCertToProfileObject {
 # Credly
 # ---------------------------------------------------------------------------
 
+function Get-CredlyPublicProfileUrl {
+    param(
+        [Parameter(Mandatory)]
+        [string]$CredlyUser
+    )
+
+    $EncodedCredlyUser =
+        [System.Uri]::EscapeDataString($CredlyUser)
+
+    return (
+        "$($script:CredlyProfileBaseUrl.TrimEnd('/'))/" +
+        $EncodedCredlyUser
+    )
+}
+
 function Get-CredlyRecentBadges {
 
     [CmdletBinding()]
@@ -1811,10 +1976,11 @@ try {
         throw "SchemaVersion '$SchemaVersionText' is not a valid version value."
     }
 
-    if ($SchemaVersion -lt [version]"2.2") {
+    if ($SchemaVersion -lt $MinimumSupportedSchemaVersion) {
         throw (
             "Configuration SchemaVersion '$SchemaVersionText' is too old for Step 3. " +
-            "Run Step 0 to generate a compatible SchemaVersion 2.2 configuration."
+            "Step 3 requires SchemaVersion $MinimumSupportedSchemaVersionText or later. " +
+            "Run Step 0 and Step 2 before continuing."
         )
     }
 
