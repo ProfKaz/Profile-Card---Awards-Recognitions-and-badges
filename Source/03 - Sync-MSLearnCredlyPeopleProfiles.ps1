@@ -2012,6 +2012,12 @@ try {
             -Name "ClientId" `
             -Path "Application")
 
+    $script:PublisherDisplayName =
+        [string](Get-RequiredPropertyValue `
+            -Object $Application `
+            -Name "DisplayName" `
+            -Path "Application")
+
     $script:ClientSecret =
         [string](Get-RequiredPropertyValue `
             -Object $Authentication `
@@ -2118,113 +2124,93 @@ try {
             -Name "ContentCategory" `
             -Path "Connector")
 
-    # Current SchemaVersion 2.2 stores Schema at the root level. The fallback
-    # supports the earlier Connector.Schema layout.
+    # SchemaVersion 2.3 stores the portable schema at the root level. Step 3
+    # resolves property names from semantic labels instead of hardcoding them.
     $ConnectorSchema =
-        Get-OptionalPropertyValue `
+        Get-RequiredPropertyValue `
             -Object $Config `
-            -Name "Schema"
+            -Name "Schema" `
+            -Path "root"
 
-    if ($null -eq $ConnectorSchema) {
-        $ConnectorSchema =
-            Get-OptionalPropertyValue `
-                -Object $Connector `
-                -Name "Schema"
-    }
+    $SchemaContracts =
+        @(
+            [PSCustomObject]@{
+                Label        = "personAccount"
+                ExpectedType = "string"
+                ScriptName   = "AccountPropertyName"
+            }
+            [PSCustomObject]@{
+                Label        = "personCertifications"
+                ExpectedType = "stringCollection"
+                ScriptName   = "CertificationPropertyName"
+            }
+            [PSCustomObject]@{
+                Label        = "title"
+                ExpectedType = "string"
+                ScriptName   = "TitlePropertyName"
+            }
+            [PSCustomObject]@{
+                Label        = "url"
+                ExpectedType = "string"
+                ScriptName   = "UrlPropertyName"
+            }
+            [PSCustomObject]@{
+                Label        = "lastModifiedBy"
+                ExpectedType = "string"
+                ScriptName   = "LastModifiedByPropertyName"
+            }
+            [PSCustomObject]@{
+                Label        = "lastModifiedDateTime"
+                ExpectedType = "dateTime"
+                ScriptName   = "LastModifiedDateTimePropertyName"
+            }
+        )
 
-    if ($null -eq $ConnectorSchema) {
-        throw "Configuration object 'Schema' is missing."
-    }
+    $ExpectedSchemaProperties = @()
 
-    $AccountSchemaProperty =
-        Get-OptionalPropertyValue `
-            -Object $ConnectorSchema `
-            -Name "AccountProperty"
+    foreach ($SchemaContract in $SchemaContracts) {
+        $SchemaProperty =
+            Get-SchemaPropertyByLabel `
+                -Schema $ConnectorSchema `
+                -Label $SchemaContract.Label
 
-    $CertificationSchemaProperty =
-        Get-OptionalPropertyValue `
-            -Object $ConnectorSchema `
-            -Name "CertificationProperty"
-
-    # Backward compatibility with the older Properties[] schema representation.
-    if ($null -eq $AccountSchemaProperty -or $null -eq $CertificationSchemaProperty) {
-
-        $ConfiguredSchemaProperties =
-            @(
-                Get-OptionalPropertyValue `
-                    -Object $ConnectorSchema `
-                    -Name "Properties"
+        if ($null -eq $SchemaProperty) {
+            throw (
+                "SchemaVersion $SchemaVersionText does not define a property labeled " +
+                "'$($SchemaContract.Label)'. Run Step 0 before Step 3."
             )
-
-        if ($null -eq $AccountSchemaProperty) {
-            $AccountSchemaProperty =
-                @(
-                    $ConfiguredSchemaProperties |
-                        Where-Object {
-                            @(
-                                Get-OptionalPropertyValue `
-                                    -Object $_ `
-                                    -Name "Labels"
-                            ) -contains "personAccount"
-                        }
-                ) |
-                Select-Object -First 1
         }
 
-        if ($null -eq $CertificationSchemaProperty) {
-            $CertificationSchemaProperty =
-                @(
-                    $ConfiguredSchemaProperties |
-                        Where-Object {
-                            @(
-                                Get-OptionalPropertyValue `
-                                    -Object $_ `
-                                    -Name "Labels"
-                            ) -contains "personCertifications"
-                        }
-                ) |
-                Select-Object -First 1
+        $PropertyName =
+            [string](Get-RequiredPropertyValue `
+                -Object $SchemaProperty `
+                -Name "Name" `
+                -Path "Schema")
+
+        $PropertyType =
+            [string](Get-RequiredPropertyValue `
+                -Object $SchemaProperty `
+                -Name "Type" `
+                -Path "Schema")
+
+        if (
+            -not $PropertyType.Equals(
+                $SchemaContract.ExpectedType,
+                [System.StringComparison]::OrdinalIgnoreCase
+            )
+        ) {
+            throw (
+                "Schema property '$PropertyName' labeled '$($SchemaContract.Label)' " +
+                "uses type '$PropertyType'; expected '$($SchemaContract.ExpectedType)'."
+            )
         }
-    }
 
-    if ($null -eq $AccountSchemaProperty) {
-        throw "Schema does not define a property labeled 'personAccount'."
-    }
+        Set-Variable `
+            -Scope Script `
+            -Name $SchemaContract.ScriptName `
+            -Value $PropertyName
 
-    if ($null -eq $CertificationSchemaProperty) {
-        throw "Schema does not define a property labeled 'personCertifications'."
-    }
-
-    $script:AccountPropertyName =
-        [string](Get-RequiredPropertyValue `
-            -Object $AccountSchemaProperty `
-            -Name "Name" `
-            -Path "Schema.AccountProperty")
-
-    $AccountPropertyType =
-        [string](Get-RequiredPropertyValue `
-            -Object $AccountSchemaProperty `
-            -Name "Type" `
-            -Path "Schema.AccountProperty")
-
-    $script:CertificationPropertyName =
-        [string](Get-RequiredPropertyValue `
-            -Object $CertificationSchemaProperty `
-            -Name "Name" `
-            -Path "Schema.CertificationProperty")
-
-    $CertificationPropertyType =
-        [string](Get-RequiredPropertyValue `
-            -Object $CertificationSchemaProperty `
-            -Name "Type" `
-            -Path "Schema.CertificationProperty")
-
-    if ($AccountPropertyType -ne "string") {
-        throw "The configured personAccount property must use schema type 'string'."
-    }
-
-    if ($CertificationPropertyType -ne "stringCollection") {
-        throw "The configured personCertifications property must use schema type 'stringCollection'."
+        $ExpectedSchemaProperties += $SchemaProperty
     }
 
     # Step 0 intentionally keeps ACL implementation details out of the portable
@@ -2765,6 +2751,10 @@ try {
     Write-Host "Connection ID            : $($script:ConnectionId)"
     Write-Host "Account property         : $($script:AccountPropertyName)"
     Write-Host "Certification property   : $($script:CertificationPropertyName)"
+    Write-Host "Title property           : $($script:TitlePropertyName)"
+    Write-Host "URL property             : $($script:UrlPropertyName)"
+    Write-Host "Last modified by         : $($script:LastModifiedByPropertyName)"
+    Write-Host "Last modified date/time  : $($script:LastModifiedDateTimePropertyName)"
     Write-Host "User source              : $($script:UserSourceType)"
     Write-Host "Microsoft Learn enabled  : $($script:LearnEnabled)"
     Write-Host "Credly enabled           : $($script:CredlyEnabled)"
@@ -2840,6 +2830,27 @@ try {
     }
 
     Write-Success "Connector is READY."
+
+    $ExternalSchema =
+        Get-ExternalSchema `
+            -ConnectionUri $script:ConnectionUri
+
+    $ExternalSchemaErrors =
+        @(
+            Test-ExternalSchemaContract `
+                -ExternalSchema $ExternalSchema `
+                -ExpectedProperties $ExpectedSchemaProperties
+        )
+
+    if ($ExternalSchemaErrors.Count -gt 0) {
+        throw (
+            "The live external schema does not match SchemaVersion $SchemaVersionText. " +
+            "Run Step 2 before Step 3. " +
+            ($ExternalSchemaErrors -join " | ")
+        )
+    }
+
+    Write-Success "External schema matches the configured SchemaVersion contract."
 
     # -----------------------------------------------------------------------
     # Users
@@ -2918,6 +2929,9 @@ try {
             $Learn =
                 $null
 
+            $TranscriptUrl =
+                $null
+
             $LearnCertObjects =
                 @()
 
@@ -2985,6 +2999,9 @@ try {
             $CredlyBadges =
                 @()
 
+            $CredlyProfileUrl =
+                $null
+
             $CredlyCertObjects =
                 @()
 
@@ -2992,6 +3009,10 @@ try {
                 0
 
             if ($HasCredly) {
+
+                $CredlyProfileUrl =
+                    Get-CredlyPublicProfileUrl `
+                        -CredlyUser $CredlyUser
 
                 $CredlyBadges =
                     @(
@@ -3368,6 +3389,43 @@ try {
                 ConvertTo-Json `
                     -Compress
 
+            $LearnDisplayName =
+                if ($null -ne $Learn -and $null -ne $Learn.Profile) {
+                    [string](
+                        Get-OptionalPropertyValue `
+                            -Object $Learn.Profile `
+                            -Name "DisplayName"
+                    )
+                }
+                else {
+                    ""
+                }
+
+            $ItemTitle =
+                if (-not [string]::IsNullOrWhiteSpace($LearnDisplayName)) {
+                    $LearnDisplayName
+                }
+                else {
+                    $UPN
+                }
+
+            $ItemSourceUrl =
+                if (-not [string]::IsNullOrWhiteSpace([string]$TranscriptUrl)) {
+                    [string]$TranscriptUrl
+                }
+                elseif (-not [string]::IsNullOrWhiteSpace([string]$CredlyProfileUrl)) {
+                    [string]$CredlyProfileUrl
+                }
+                else {
+                    throw "No public source URL could be resolved for '$UPN'."
+                }
+
+            $ItemModifiedBy =
+                $script:PublisherDisplayName
+
+            $ItemModifiedDateTime =
+                [datetimeoffset]::UtcNow
+
             $ItemProperties =
                 [ordered]@{}
 
@@ -3381,6 +3439,25 @@ try {
 
             $ItemProperties[$script:CertificationPropertyName] =
                 $CertificationStrings
+
+            $ItemProperties[$script:TitlePropertyName] =
+                $ItemTitle
+
+            $ItemProperties[$script:UrlPropertyName] =
+                $ItemSourceUrl
+
+            $ItemProperties[$script:LastModifiedByPropertyName] =
+                $ItemModifiedBy
+
+            $ItemProperties[$script:LastModifiedDateTimePropertyName] =
+                $ItemModifiedDateTime.ToString("o")
+
+            Write-Host ""
+            Write-Host "  Semantic metadata:"
+            Write-Host "    Title                 : $ItemTitle"
+            Write-Host "    URL                   : $ItemSourceUrl"
+            Write-Host "    Last modified by      : $ItemModifiedBy"
+            Write-Host "    Last modified UTC     : $($ItemModifiedDateTime.ToString('o'))"
 
             $ExternalItem =
                 @{
