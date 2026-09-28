@@ -3518,10 +3518,89 @@ try {
                         -Name "id"
 
                 if ($ReadBackId -ne $ItemId) {
-                    throw "External item validation failed after PUT."
+                    throw "External item validation failed after PUT: item ID mismatch."
                 }
 
-                Write-Success "Connector item updated."
+                $ReadBackProperties =
+                    Get-OptionalPropertyValue `
+                        -Object $ReadBack `
+                        -Name "properties"
+
+                if ($null -eq $ReadBackProperties) {
+                    throw "External item validation failed after PUT: properties were not returned."
+                }
+
+                foreach ($SemanticValidation in @(
+                    [PSCustomObject]@{
+                        Name     = $script:TitlePropertyName
+                        Expected = $ItemTitle
+                    }
+                    [PSCustomObject]@{
+                        Name     = $script:UrlPropertyName
+                        Expected = $ItemSourceUrl
+                    }
+                    [PSCustomObject]@{
+                        Name     = $script:LastModifiedByPropertyName
+                        Expected = $ItemModifiedBy
+                    }
+                )) {
+                    $ActualSemanticValue =
+                        [string](
+                            Get-OptionalPropertyValue `
+                                -Object $ReadBackProperties `
+                                -Name $SemanticValidation.Name
+                        )
+
+                    if ($ActualSemanticValue -ne [string]$SemanticValidation.Expected) {
+                        throw (
+                            "External item validation failed after PUT: property " +
+                            "'$($SemanticValidation.Name)' returned '$ActualSemanticValue'; " +
+                            "expected '$($SemanticValidation.Expected)'."
+                        )
+                    }
+                }
+
+                $ReadBackModifiedText =
+                    [string](
+                        Get-OptionalPropertyValue `
+                            -Object $ReadBackProperties `
+                            -Name $script:LastModifiedDateTimePropertyName
+                    )
+
+                if ([string]::IsNullOrWhiteSpace($ReadBackModifiedText)) {
+                    throw (
+                        "External item validation failed after PUT: property " +
+                        "'$($script:LastModifiedDateTimePropertyName)' was not returned."
+                    )
+                }
+
+                try {
+                    $ReadBackModifiedDateTime =
+                        [datetimeoffset]::Parse(
+                            $ReadBackModifiedText,
+                            [System.Globalization.CultureInfo]::InvariantCulture
+                        )
+                }
+                catch {
+                    throw (
+                        "External item validation failed after PUT: property " +
+                        "'$($script:LastModifiedDateTimePropertyName)' is not a valid dateTime value."
+                    )
+                }
+
+                $ModifiedDeltaSeconds =
+                    [math]::Abs(
+                        ($ReadBackModifiedDateTime - $ItemModifiedDateTime).TotalSeconds
+                    )
+
+                if ($ModifiedDeltaSeconds -gt 1) {
+                    throw (
+                        "External item validation failed after PUT: property " +
+                        "'$($script:LastModifiedDateTimePropertyName)' does not match the submitted value."
+                    )
+                }
+
+                Write-Success "Connector item updated and semantic metadata validated."
 
                 $Status =
                     "Synchronized"
