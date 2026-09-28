@@ -216,6 +216,9 @@ function Get-ExternalSchema {
             Invoke-MgGraphRequest `
                 -Method GET `
                 -Uri "$($script:ConnectionsUri)/$Id/schema" `
+                -Headers @{
+                    Prefer = "include-unknown-enum-members"
+                } `
                 -OutputType PSObject `
                 -ErrorAction Stop
 
@@ -329,6 +332,17 @@ function Get-SchemaDifferences {
                         Sort-Object -Unique
                 )
 
+            if (
+                $ActualLabels -contains "unknownfuturevalue" -and
+                @($DesiredLabels | Where-Object { $_ -like "person*" }).Count -gt 0
+            ) {
+                throw (
+                    "Microsoft Graph returned 'unknownFutureValue' for the People semantic label " +
+                    "on property '$DesiredName' even though Step 2 requested " +
+                    "'Prefer: include-unknown-enum-members'. The schema cannot be validated safely."
+                )
+            }
+
             if (($DesiredLabels -join "|") -ne ($ActualLabels -join "|")) {
                 $Differences += (
                     "Property '$DesiredName' labels are '$($ActualLabels -join ",")'; " +
@@ -423,6 +437,59 @@ function Merge-SchemaProperties {
     }
 
     return @($Merged)
+}
+
+function Wait-SchemaOperation {
+    param(
+        [Parameter(Mandatory)][string]$OperationUri,
+        [Parameter(Mandatory)][int]$TimeoutMinutes,
+        [Parameter(Mandatory)][int]$PollSeconds
+    )
+
+    $Deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+
+    do {
+        Start-Sleep -Seconds $PollSeconds
+
+        $Operation =
+            Invoke-MgGraphRequest `
+                -Method GET `
+                -Uri $OperationUri `
+                -OutputType PSObject `
+                -ErrorAction Stop
+
+        $OperationStatus =
+            ([string](Get-BagValue -Object $Operation -Name "status")).ToLowerInvariant()
+
+        Write-Host "Schema operation status: $OperationStatus"
+
+        switch ($OperationStatus) {
+            "completed" {
+                return $Operation
+            }
+
+            "failed" {
+                $OperationError =
+                    Get-BagValue -Object $Operation -Name "error"
+
+                $ErrorMessage =
+                    [string](Get-BagValue -Object $OperationError -Name "message")
+
+                if ([string]::IsNullOrWhiteSpace($ErrorMessage)) {
+                    $ErrorMessage = "Microsoft Graph reported a failed schema operation."
+                }
+
+                throw "Schema operation failed: $ErrorMessage"
+            }
+        }
+
+        if ((Get-Date) -ge $Deadline) {
+            throw (
+                "Timeout after $TimeoutMinutes minutes waiting for the Microsoft Graph " +
+                "schema operation to complete."
+            )
+        }
+    } while ($true)
 }
 
 function Wait-ExternalSchemaReady {
@@ -1141,16 +1208,63 @@ try {
             $MergedSchemaProperties.Count
         )
 
+        $SchemaPatchResponseHeaders = $null
+        $SchemaPatchStatusCode = $null
+
         Invoke-MgGraphRequest `
             -Method PATCH `
             -Uri "$($script:ConnectionsUri)/$ConnectionId/schema" `
             -Body ($SchemaPatchBody | ConvertTo-Json -Depth 30 -Compress) `
             -ContentType "application/json" `
+            -ResponseHeadersVariable SchemaPatchResponseHeaders `
+            -StatusCodeVariable SchemaPatchStatusCode `
             -ErrorAction Stop |
             Out-Null
 
+        Write-Host "Schema PATCH HTTP status: $SchemaPatchStatusCode"
+
+        $SchemaOperationUri = $null
+
+        if ($null -ne $SchemaPatchResponseHeaders) {
+            foreach ($HeaderName in @("Location", "location")) {
+                try {
+                    $HeaderValue =
+                        Get-BagValue `
+                            -Object $SchemaPatchResponseHeaders `
+                            -Name $HeaderName
+
+                    if ($null -ne $HeaderValue) {
+                        $SchemaOperationUri =
+                            [string](@($HeaderValue) | Select-Object -First 1)
+
+                        if (-not [string]::IsNullOrWhiteSpace($SchemaOperationUri)) {
+                            break
+                        }
+                    }
+                }
+                catch {
+                }
+            }
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($SchemaOperationUri)) {
+            Write-Host "Schema operation: $SchemaOperationUri"
+
+            Wait-SchemaOperation `
+                -OperationUri $SchemaOperationUri `
+                -TimeoutMinutes $SchemaTimeoutMinutes `
+                -PollSeconds $SchemaPollSeconds |
+                Out-Null
+        }
+        else {
+            Write-Warning (
+                "Microsoft Graph did not expose a Location header to Step 2. " +
+                "Falling back to schema convergence polling."
+            )
+        }
+
         Write-Host (
-            "Waiting for schema convergence " +
+            "Validating schema convergence " +
             "(timeout $SchemaTimeoutMinutes min, poll every $SchemaPollSeconds sec)..."
         )
 
