@@ -27,9 +27,8 @@
       - output directories
 
     Supported user sources:
-      - CSV
-      - JSON
-      - SharePoint Online list through Microsoft Graph
+      - CSV with the compact Step 0 contract.
+      - JSON and SharePoint Online when their extended source configuration is present.
 
     Synchronization behavior:
       Microsoft Learn
@@ -1815,11 +1814,13 @@ try {
     if ($SchemaVersion -lt [version]"2.2") {
         throw (
             "Configuration SchemaVersion '$SchemaVersionText' is too old for Step 3. " +
-            "Run Update-MSLearnPeopleConnectorConfig-v2.2.ps1 first."
+            "Run Step 0 to generate a compatible SchemaVersion 2.2 configuration."
         )
     }
 
+    # -----------------------------------------------------------------------
     # Application / authentication
+    # -----------------------------------------------------------------------
 
     $Application =
         Get-RequiredPropertyValue `
@@ -1861,22 +1862,30 @@ try {
         throw "Authentication.SecretStorage '$SecretStorage' is not supported by this version."
     }
 
-    $AuthMode =
-        [string](Get-RequiredPropertyValue `
+    # Authentication.Mode existed in an earlier 2.2 draft but is not part of the
+    # Step 0 contract currently published in this repository. If present, validate
+    # it; otherwise ClientSecret is the implicit authentication mode.
+    $AuthModeValue =
+        Get-OptionalPropertyValue `
             -Object $Authentication `
-            -Name "Mode" `
-            -Path "Authentication")
+            -Name "Mode"
+
+    $AuthMode =
+        if ([string]::IsNullOrWhiteSpace([string]$AuthModeValue)) {
+            "ClientSecret"
+        }
+        else {
+            [string]$AuthModeValue
+        }
 
     if ($AuthMode -ne "ClientSecret") {
         throw "Authentication.Mode '$AuthMode' is not supported by this version."
     }
 
     $SecretExpirationText =
-        [string](Get-RequiredPropertyValue `
+        [string](Get-OptionalPropertyValue `
             -Object $Authentication `
-            -Name "SecretExpirationUtc" `
-            -Path "Authentication" `
-            -AllowEmpty)
+            -Name "SecretExpirationUtc")
 
     if (-not [string]::IsNullOrWhiteSpace($SecretExpirationText)) {
 
@@ -1891,7 +1900,9 @@ try {
         }
     }
 
-    # Graph
+    # -----------------------------------------------------------------------
+    # Microsoft Graph
+    # -----------------------------------------------------------------------
 
     $MicrosoftGraph =
         Get-RequiredPropertyValue `
@@ -1899,13 +1910,29 @@ try {
             -Name "MicrosoftGraph" `
             -Path "root"
 
-    $script:GraphV1 =
-        ([string](Get-RequiredPropertyValue `
+    $GraphV1Value =
+        Get-OptionalPropertyValue `
             -Object $MicrosoftGraph `
-            -Name "BaseUri" `
-            -Path "MicrosoftGraph")).TrimEnd("/")
+            -Name "GraphV1"
 
-    # Connector
+    if ([string]::IsNullOrWhiteSpace([string]$GraphV1Value)) {
+        # Backward compatibility with the earlier configuration contract.
+        $GraphV1Value =
+            Get-OptionalPropertyValue `
+                -Object $MicrosoftGraph `
+                -Name "BaseUri"
+    }
+
+    if ([string]::IsNullOrWhiteSpace([string]$GraphV1Value)) {
+        throw "Configuration value 'MicrosoftGraph.GraphV1' is missing."
+    }
+
+    $script:GraphV1 =
+        ([string]$GraphV1Value).TrimEnd("/")
+
+    # -----------------------------------------------------------------------
+    # Connector and schema
+    # -----------------------------------------------------------------------
 
     $Connector =
         Get-RequiredPropertyValue `
@@ -1925,77 +1952,107 @@ try {
             -Name "ContentCategory" `
             -Path "Connector")
 
+    # Current SchemaVersion 2.2 stores Schema at the root level. The fallback
+    # supports the earlier Connector.Schema layout.
     $ConnectorSchema =
-        Get-RequiredPropertyValue `
-            -Object $Connector `
-            -Name "Schema" `
-            -Path "Connector"
+        Get-OptionalPropertyValue `
+            -Object $Config `
+            -Name "Schema"
 
-    $ConfiguredSchemaProperties =
-        @(
-            Get-RequiredPropertyValue `
-                -Object $ConnectorSchema `
-                -Name "Properties" `
-                -Path "Connector.Schema"
-        )
+    if ($null -eq $ConnectorSchema) {
+        $ConnectorSchema =
+            Get-OptionalPropertyValue `
+                -Object $Connector `
+                -Name "Schema"
+    }
+
+    if ($null -eq $ConnectorSchema) {
+        throw "Configuration object 'Schema' is missing."
+    }
 
     $AccountSchemaProperty =
-        @(
-            $ConfiguredSchemaProperties |
-                Where-Object {
-                    @(
-                        Get-OptionalPropertyValue `
-                            -Object $_ `
-                            -Name "Labels"
-                    ) -contains "personAccount"
-                }
-        ) |
-        Select-Object -First 1
+        Get-OptionalPropertyValue `
+            -Object $ConnectorSchema `
+            -Name "AccountProperty"
 
     $CertificationSchemaProperty =
-        @(
-            $ConfiguredSchemaProperties |
-                Where-Object {
-                    @(
-                        Get-OptionalPropertyValue `
-                            -Object $_ `
-                            -Name "Labels"
-                    ) -contains "personCertifications"
-                }
-        ) |
-        Select-Object -First 1
+        Get-OptionalPropertyValue `
+            -Object $ConnectorSchema `
+            -Name "CertificationProperty"
+
+    # Backward compatibility with the older Properties[] schema representation.
+    if ($null -eq $AccountSchemaProperty -or $null -eq $CertificationSchemaProperty) {
+
+        $ConfiguredSchemaProperties =
+            @(
+                Get-OptionalPropertyValue `
+                    -Object $ConnectorSchema `
+                    -Name "Properties"
+            )
+
+        if ($null -eq $AccountSchemaProperty) {
+            $AccountSchemaProperty =
+                @(
+                    $ConfiguredSchemaProperties |
+                        Where-Object {
+                            @(
+                                Get-OptionalPropertyValue `
+                                    -Object $_ `
+                                    -Name "Labels"
+                            ) -contains "personAccount"
+                        }
+                ) |
+                Select-Object -First 1
+        }
+
+        if ($null -eq $CertificationSchemaProperty) {
+            $CertificationSchemaProperty =
+                @(
+                    $ConfiguredSchemaProperties |
+                        Where-Object {
+                            @(
+                                Get-OptionalPropertyValue `
+                                    -Object $_ `
+                                    -Name "Labels"
+                            ) -contains "personCertifications"
+                        }
+                ) |
+                Select-Object -First 1
+        }
+    }
 
     if ($null -eq $AccountSchemaProperty) {
-        throw "Connector.Schema does not define a property labeled 'personAccount'."
+        throw "Schema does not define a property labeled 'personAccount'."
     }
 
     if ($null -eq $CertificationSchemaProperty) {
-        throw "Connector.Schema does not define a property labeled 'personCertifications'."
+        throw "Schema does not define a property labeled 'personCertifications'."
     }
 
     $script:AccountPropertyName =
         [string](Get-RequiredPropertyValue `
             -Object $AccountSchemaProperty `
             -Name "Name" `
-            -Path "Connector.Schema.Properties[personAccount]")
+            -Path "Schema.AccountProperty")
 
     $AccountPropertyType =
         [string](Get-RequiredPropertyValue `
             -Object $AccountSchemaProperty `
             -Name "Type" `
-            -Path "Connector.Schema.Properties[personAccount]")
+            -Path "Schema.AccountProperty")
 
     $script:CertificationPropertyName =
         [string](Get-RequiredPropertyValue `
             -Object $CertificationSchemaProperty `
             -Name "Name" `
-            -Path "Connector.Schema.Properties[personCertifications]")
+            -Path "Schema.CertificationProperty")
 
     $CertificationPropertyType =
         [string](Get-RequiredPropertyValue `
             -Object $CertificationSchemaProperty `
             -Name "Type" `
-            -Path "Connector.Schema.Properties[personCertifications]")
+            -Path "Schema.CertificationProperty")
+
     if ($AccountPropertyType -ne "string") {
         throw "The configured personAccount property must use schema type 'string'."
     }
@@ -2004,47 +2061,57 @@ try {
         throw "The configured personCertifications property must use schema type 'stringCollection'."
     }
 
+    # Step 0 intentionally keeps ACL implementation details out of the portable
+    # configuration. Use the People connector ACL behavior validated by v1 unless
+    # an older/extended ExternalItemAcl object is explicitly present.
     $ExternalItemAcl =
-        Get-RequiredPropertyValue `
+        Get-OptionalPropertyValue `
             -Object $Connector `
-            -Name "ExternalItemAcl" `
-            -Path "Connector"
+            -Name "ExternalItemAcl"
 
-    $script:AclType =
-        [string](Get-RequiredPropertyValue `
-            -Object $ExternalItemAcl `
-            -Name "Type" `
-            -Path "Connector.ExternalItemAcl")
+    if ($null -ne $ExternalItemAcl) {
 
-    $script:AclAccessType =
-        [string](Get-RequiredPropertyValue `
-            -Object $ExternalItemAcl `
-            -Name "AccessType" `
-            -Path "Connector.ExternalItemAcl")
+        $script:AclType =
+            [string](Get-RequiredPropertyValue `
+                -Object $ExternalItemAcl `
+                -Name "Type" `
+                -Path "Connector.ExternalItemAcl")
 
-    $AclValueSource =
-        [string](Get-RequiredPropertyValue `
-            -Object $ExternalItemAcl `
-            -Name "ValueSource" `
-            -Path "Connector.ExternalItemAcl")
+        $script:AclAccessType =
+            [string](Get-RequiredPropertyValue `
+                -Object $ExternalItemAcl `
+                -Name "AccessType" `
+                -Path "Connector.ExternalItemAcl")
 
-    switch ($AclValueSource) {
+        $AclValueSource =
+            [string](Get-RequiredPropertyValue `
+                -Object $ExternalItemAcl `
+                -Name "ValueSource" `
+                -Path "Connector.ExternalItemAcl")
 
-        "TenantId" {
-            $script:AclValue = $script:TenantId
+        switch ($AclValueSource) {
+
+            "TenantId" {
+                $script:AclValue = $script:TenantId
+            }
+
+            "Literal" {
+                $script:AclValue =
+                    [string](Get-RequiredPropertyValue `
+                        -Object $ExternalItemAcl `
+                        -Name "Value" `
+                        -Path "Connector.ExternalItemAcl")
+            }
+
+            default {
+                throw "Unsupported Connector.ExternalItemAcl.ValueSource '$AclValueSource'."
+            }
         }
-
-        "Literal" {
-            $script:AclValue =
-                [string](Get-RequiredPropertyValue `
-                    -Object $ExternalItemAcl `
-                    -Name "Value" `
-                    -Path "Connector.ExternalItemAcl")
-        }
-
-        default {
-            throw "Unsupported Connector.ExternalItemAcl.ValueSource '$AclValueSource'."
-        }
+    }
+    else {
+        $script:AclType = "everyone"
+        $script:AclValue = $script:TenantId
+        $script:AclAccessType = "grant"
     }
 
     $script:ConnectionUri =
@@ -2053,7 +2120,9 @@ try {
     $script:ItemsUri =
         "$($script:ConnectionUri)/items"
 
+    # -----------------------------------------------------------------------
     # Credential sources
+    # -----------------------------------------------------------------------
 
     $CredentialSources =
         Get-RequiredPropertyValue `
@@ -2079,40 +2148,72 @@ try {
             -Name "Enabled" `
             -Path "CredentialSources.MicrosoftLearn")
 
+    $LearnLocale =
+        [string](Get-OptionalPropertyValue `
+            -Object $LearnConfig `
+            -Name "Locale")
+
+    if ([string]::IsNullOrWhiteSpace($LearnLocale)) {
+        $LearnLocale = "en-us"
+    }
+
+    $Value =
+        Get-OptionalPropertyValue -Object $LearnConfig -Name "ProfileBaseUrl"
     $script:LearnProfileBaseUrl =
-        [string](Get-RequiredPropertyValue `
-            -Object $LearnConfig `
-            -Name "ProfileBaseUrl" `
-            -Path "CredentialSources.MicrosoftLearn")
+        if ([string]::IsNullOrWhiteSpace([string]$Value)) {
+            "https://learn.microsoft.com/api/profiles"
+        }
+        else {
+            [string]$Value
+        }
 
+    $Value =
+        Get-OptionalPropertyValue -Object $LearnConfig -Name "TranscriptBaseUrl"
     $script:LearnTranscriptBaseUrl =
-        [string](Get-RequiredPropertyValue `
-            -Object $LearnConfig `
-            -Name "TranscriptBaseUrl" `
-            -Path "CredentialSources.MicrosoftLearn")
+        if ([string]::IsNullOrWhiteSpace([string]$Value)) {
+            "https://learn.microsoft.com/api/profiles/transcript/share"
+        }
+        else {
+            [string]$Value
+        }
 
+    $Value =
+        Get-OptionalPropertyValue -Object $LearnConfig -Name "PublicTranscriptBaseUrl"
     $script:LearnPublicTranscriptBaseUrl =
-        [string](Get-RequiredPropertyValue `
-            -Object $LearnConfig `
-            -Name "PublicTranscriptBaseUrl" `
-            -Path "CredentialSources.MicrosoftLearn")
+        if ([string]::IsNullOrWhiteSpace([string]$Value)) {
+            "https://learn.microsoft.com/$LearnLocale/users"
+        }
+        else {
+            [string]$Value
+        }
 
+    $Value =
+        Get-OptionalPropertyValue -Object $LearnConfig -Name "ManagedDescription"
     $script:LearnManagedDescription =
-        [string](Get-RequiredPropertyValue `
+        if ([string]::IsNullOrWhiteSpace([string]$Value)) {
+            "Microsoft certification synchronized from Microsoft Learn"
+        }
+        else {
+            [string]$Value
+        }
+
+    $PublishActiveValue =
+        Get-OptionalPropertyValue `
             -Object $LearnConfig `
-            -Name "ManagedDescription" `
-            -Path "CredentialSources.MicrosoftLearn")
+            -Name "PublishActiveCertificationsOnly"
 
     $PublishActiveOnly =
-        [bool](Get-RequiredPropertyValue `
-            -Object $LearnConfig `
-            -Name "PublishActiveCertificationsOnly" `
-            -Path "CredentialSources.MicrosoftLearn")
+        if ($null -eq $PublishActiveValue) {
+            $true
+        }
+        else {
+            [bool]$PublishActiveValue
+        }
 
     if ($script:LearnEnabled -and -not $PublishActiveOnly) {
         throw (
             "This Step 3 implementation currently supports Microsoft Learn active " +
-            "certifications only. Set PublishActiveCertificationsOnly to true."
+            "certifications only."
         )
     }
 
@@ -2122,17 +2223,25 @@ try {
             -Name "Enabled" `
             -Path "CredentialSources.Credly")
 
+    $Value =
+        Get-OptionalPropertyValue -Object $CredlyConfig -Name "ProfileBaseUrl"
     $script:CredlyProfileBaseUrl =
-        [string](Get-RequiredPropertyValue `
-            -Object $CredlyConfig `
-            -Name "ProfileBaseUrl" `
-            -Path "CredentialSources.Credly")
+        if ([string]::IsNullOrWhiteSpace([string]$Value)) {
+            "https://www.credly.com/users"
+        }
+        else {
+            [string]$Value
+        }
 
+    $Value =
+        Get-OptionalPropertyValue -Object $CredlyConfig -Name "BadgesEndpointSuffix"
     $script:CredlyBadgesEndpointSuffix =
-        [string](Get-RequiredPropertyValue `
-            -Object $CredlyConfig `
-            -Name "BadgesEndpointSuffix" `
-            -Path "CredentialSources.Credly")
+        if ([string]::IsNullOrWhiteSpace([string]$Value)) {
+            "badges.json"
+        }
+        else {
+            [string]$Value
+        }
 
     $script:CredlyMonthsBack =
         [int](Get-RequiredPropertyValue `
@@ -2140,49 +2249,60 @@ try {
             -Name "MonthsBack" `
             -Path "CredentialSources.Credly")
 
+    $Value =
+        Get-OptionalPropertyValue -Object $CredlyConfig -Name "RequireAccepted"
     $script:CredlyRequireAccepted =
-        [bool](Get-RequiredPropertyValue `
-            -Object $CredlyConfig `
-            -Name "RequireAccepted" `
-            -Path "CredentialSources.Credly")
+        if ($null -eq $Value) { $true } else { [bool]$Value }
 
+    $Value =
+        Get-OptionalPropertyValue -Object $CredlyConfig -Name "AcceptedState"
     $script:CredlyAcceptedState =
-        [string](Get-RequiredPropertyValue `
-            -Object $CredlyConfig `
-            -Name "AcceptedState" `
-            -Path "CredentialSources.Credly")
+        if ([string]::IsNullOrWhiteSpace([string]$Value)) {
+            "accepted"
+        }
+        else {
+            [string]$Value
+        }
 
+    $Value =
+        Get-OptionalPropertyValue -Object $CredlyConfig -Name "RequirePublic"
     $script:CredlyRequirePublic =
-        [bool](Get-RequiredPropertyValue `
-            -Object $CredlyConfig `
-            -Name "RequirePublic" `
-            -Path "CredentialSources.Credly")
+        if ($null -eq $Value) { $true } else { [bool]$Value }
 
+    $Value =
+        Get-OptionalPropertyValue -Object $CredlyConfig -Name "DeduplicateAgainstMicrosoftLearn"
     $script:CredlyDeduplicateAgainstLearn =
-        [bool](Get-RequiredPropertyValue `
-            -Object $CredlyConfig `
-            -Name "DeduplicateAgainstMicrosoftLearn" `
-            -Path "CredentialSources.Credly")
+        if ($null -eq $Value) { $true } else { [bool]$Value }
 
+    $Value =
+        Get-OptionalPropertyValue -Object $CredlyConfig -Name "ManagedDescriptionPrefix"
     $script:CredlyManagedDescriptionPrefix =
-        [string](Get-RequiredPropertyValue `
-            -Object $CredlyConfig `
-            -Name "ManagedDescriptionPrefix" `
-            -Path "CredentialSources.Credly")
+        if ([string]::IsNullOrWhiteSpace([string]$Value)) {
+            "Credly badge synchronized from public profile"
+        }
+        else {
+            [string]$Value
+        }
 
+    $Value =
+        Get-OptionalPropertyValue -Object $CredlyConfig -Name "CredentialIdPrefix"
     $script:CredlyCredentialIdPrefix =
-        [string](Get-RequiredPropertyValue `
-            -Object $CredlyConfig `
-            -Name "CredentialIdPrefix" `
-            -Path "CredentialSources.Credly")
+        if ([string]::IsNullOrWhiteSpace([string]$Value)) {
+            "credly:"
+        }
+        else {
+            [string]$Value
+        }
 
     if ($script:CredlyMonthsBack -lt 1) {
         throw "CredentialSources.Credly.MonthsBack must be greater than zero."
     }
 
+    # -----------------------------------------------------------------------
     # User source
+    # -----------------------------------------------------------------------
 
-    $script:UserSource =
+    $UserSourceConfig =
         Get-RequiredPropertyValue `
             -Object $Config `
             -Name "UserSource" `
@@ -2190,7 +2310,7 @@ try {
 
     $script:UserSourceType =
         [string](Get-RequiredPropertyValue `
-            -Object $script:UserSource `
+            -Object $UserSourceConfig `
             -Name "Type" `
             -Path "UserSource")
 
@@ -2198,11 +2318,18 @@ try {
         throw "Unsupported UserSource.Type '$($script:UserSourceType)'."
     }
 
+    $PathResolutionValue =
+        Get-OptionalPropertyValue `
+            -Object $UserSourceConfig `
+            -Name "PathResolution"
+
     $script:UserSourcePathResolution =
-        [string](Get-RequiredPropertyValue `
-            -Object $script:UserSource `
-            -Name "PathResolution" `
-            -Path "UserSource")
+        if ([string]::IsNullOrWhiteSpace([string]$PathResolutionValue)) {
+            "ScriptRoot"
+        }
+        else {
+            [string]$PathResolutionValue
+        }
 
     if (
         $script:UserSourcePathResolution -notin
@@ -2211,11 +2338,22 @@ try {
         throw "Unsupported UserSource.PathResolution '$($script:UserSourcePathResolution)'."
     }
 
+    # FieldMapping is a root-level object in the current Step 0 contract.
     $script:FieldMapping =
-        Get-RequiredPropertyValue `
-            -Object $script:UserSource `
-            -Name "FieldMapping" `
-            -Path "UserSource"
+        Get-OptionalPropertyValue `
+            -Object $Config `
+            -Name "FieldMapping"
+
+    if ($null -eq $script:FieldMapping) {
+        $script:FieldMapping =
+            Get-OptionalPropertyValue `
+                -Object $UserSourceConfig `
+                -Name "FieldMapping"
+    }
+
+    if ($null -eq $script:FieldMapping) {
+        throw "Configuration object 'FieldMapping' is missing."
+    }
 
     foreach ($LogicalField in @(
         "UserPrincipalName",
@@ -2228,10 +2366,78 @@ try {
         [void](Get-RequiredPropertyValue `
             -Object $script:FieldMapping `
             -Name $LogicalField `
-            -Path "UserSource.FieldMapping")
+            -Path "FieldMapping")
     }
 
+    # Normalize the current compact UserSource contract into the richer runtime
+    # object expected by the import helper functions.
+    if ($script:UserSourceType -eq "Csv") {
+
+        $CsvConfig =
+            Get-OptionalPropertyValue `
+                -Object $UserSourceConfig `
+                -Name "Csv"
+
+        if ($null -eq $CsvConfig) {
+
+            $CsvPath =
+                [string](Get-RequiredPropertyValue `
+                    -Object $UserSourceConfig `
+                    -Name "CsvPath" `
+                    -Path "UserSource")
+
+            $CsvConfig =
+                [PSCustomObject]@{
+                    Path      = $CsvPath
+                    Delimiter = "Auto"
+                    Encoding  = "UTF8"
+                }
+        }
+
+        $script:UserSource =
+            [PSCustomObject]@{
+                Type = "Csv"
+                Csv  = $CsvConfig
+            }
+    }
+    elseif ($script:UserSourceType -eq "Json") {
+
+        $JsonConfig =
+            Get-OptionalPropertyValue `
+                -Object $UserSourceConfig `
+                -Name "Json"
+
+        if ($null -eq $JsonConfig) {
+            throw "UserSource.Type is Json but UserSource.Json is not configured."
+        }
+
+        $script:UserSource =
+            [PSCustomObject]@{
+                Type = "Json"
+                Json = $JsonConfig
+            }
+    }
+    else {
+
+        $SharePointConfig =
+            Get-OptionalPropertyValue `
+                -Object $UserSourceConfig `
+                -Name "SharePointOnline"
+
+        if ($null -eq $SharePointConfig) {
+            throw "UserSource.Type is SharePointOnline but UserSource.SharePointOnline is not configured."
+        }
+
+        $script:UserSource =
+            [PSCustomObject]@{
+                Type             = "SharePointOnline"
+                SharePointOnline = $SharePointConfig
+            }
+    }
+
+    # -----------------------------------------------------------------------
     # Synchronization
+    # -----------------------------------------------------------------------
 
     $Synchronization =
         Get-RequiredPropertyValue `
@@ -2239,17 +2445,31 @@ try {
             -Name "Synchronization" `
             -Path "root"
 
+    $Value =
+        Get-OptionalPropertyValue -Object $Synchronization -Name "RemoveStaleManaged"
+
+    if ($null -eq $Value) {
+        $Value =
+            Get-OptionalPropertyValue `
+                -Object $Synchronization `
+                -Name "RemoveStaleManagedCredentials"
+    }
+
     $script:RemoveStaleManagedCredentials =
-        [bool](Get-RequiredPropertyValue `
-            -Object $Synchronization `
-            -Name "RemoveStaleManagedCredentials" `
-            -Path "Synchronization")
+        if ($null -eq $Value) { $true } else { [bool]$Value }
+
+    $Value =
+        Get-OptionalPropertyValue -Object $Synchronization -Name "PreserveUnmanaged"
+
+    if ($null -eq $Value) {
+        $Value =
+            Get-OptionalPropertyValue `
+                -Object $Synchronization `
+                -Name "PreserveUnmanagedCredentials"
+    }
 
     $script:PreserveUnmanagedCredentials =
-        [bool](Get-RequiredPropertyValue `
-            -Object $Synchronization `
-            -Name "PreserveUnmanagedCredentials" `
-            -Path "Synchronization")
+        if ($null -eq $Value) { $true } else { [bool]$Value }
 
     $script:ContinueOnUserError =
         [bool](Get-RequiredPropertyValue `
@@ -2263,13 +2483,20 @@ try {
             -Name "DryRun" `
             -Path "Synchronization")
 
-    $script:ExternalItemIdPrefix =
-        [string](Get-RequiredPropertyValue `
-            -Object $Synchronization `
-            -Name "ExternalItemIdPrefix" `
-            -Path "Synchronization")
+    $Value =
+        Get-OptionalPropertyValue -Object $Synchronization -Name "ExternalItemIdPrefix"
 
+    $script:ExternalItemIdPrefix =
+        if ([string]::IsNullOrWhiteSpace([string]$Value)) {
+            "u"
+        }
+        else {
+            [string]$Value
+        }
+
+    # -----------------------------------------------------------------------
     # Output
+    # -----------------------------------------------------------------------
 
     $Output =
         Get-RequiredPropertyValue `
@@ -2277,11 +2504,16 @@ try {
             -Name "Output" `
             -Path "root"
 
+    $PathResolutionValue =
+        Get-OptionalPropertyValue -Object $Output -Name "PathResolution"
+
     $OutputPathResolution =
-        [string](Get-RequiredPropertyValue `
-            -Object $Output `
-            -Name "PathResolution" `
-            -Path "Output")
+        if ([string]::IsNullOrWhiteSpace([string]$PathResolutionValue)) {
+            "ScriptRoot"
+        }
+        else {
+            [string]$PathResolutionValue
+        }
 
     if (
         $OutputPathResolution -notin
@@ -2290,26 +2522,38 @@ try {
         throw "Unsupported Output.PathResolution '$OutputPathResolution'."
     }
 
-    $LogDirectorySetting =
-        [string](Get-RequiredPropertyValue `
-            -Object $Output `
-            -Name "LogDirectory" `
-            -Path "Output")
+    $LogDirectoryValue =
+        Get-OptionalPropertyValue -Object $Output -Name "LogsDirectory"
 
-    $ReportDirectorySetting =
-        [string](Get-RequiredPropertyValue `
-            -Object $Output `
-            -Name "ReportDirectory" `
-            -Path "Output")
+    if ([string]::IsNullOrWhiteSpace([string]$LogDirectoryValue)) {
+        $LogDirectoryValue =
+            Get-OptionalPropertyValue -Object $Output -Name "LogDirectory"
+    }
+
+    if ([string]::IsNullOrWhiteSpace([string]$LogDirectoryValue)) {
+        throw "Configuration value 'Output.LogsDirectory' is missing."
+    }
+
+    $ReportDirectoryValue =
+        Get-OptionalPropertyValue -Object $Output -Name "ReportsDirectory"
+
+    if ([string]::IsNullOrWhiteSpace([string]$ReportDirectoryValue)) {
+        $ReportDirectoryValue =
+            Get-OptionalPropertyValue -Object $Output -Name "ReportDirectory"
+    }
+
+    if ([string]::IsNullOrWhiteSpace([string]$ReportDirectoryValue)) {
+        throw "Configuration value 'Output.ReportsDirectory' is missing."
+    }
 
     $LogDirectory =
         Resolve-ConfiguredPath `
-            -Path $LogDirectorySetting `
+            -Path ([string]$LogDirectoryValue) `
             -Resolution $OutputPathResolution
 
     $ReportDirectory =
         Resolve-ConfiguredPath `
-            -Path $ReportDirectorySetting `
+            -Path ([string]$ReportDirectoryValue) `
             -Resolution $OutputPathResolution
 
     foreach ($Directory in @($LogDirectory,$ReportDirectory)) {
