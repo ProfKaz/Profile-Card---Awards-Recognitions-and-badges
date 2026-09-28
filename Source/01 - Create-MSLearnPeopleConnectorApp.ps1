@@ -206,6 +206,25 @@ function Set-ObjectProperty {
     }
 }
 
+function Get-OptionalPropertyValue {
+    param(
+        [Parameter(Mandatory)]$Object,
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    if ($null -eq $Object) {
+        return $null
+    }
+
+    $property = $Object.PSObject.Properties[$Name]
+
+    if ($null -eq $property) {
+        return $null
+    }
+
+    return $property.Value
+}
+
 function Save-JsonAtomic {
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -665,19 +684,43 @@ function Connect-FreshGraphSession {
         $token = Get-FreshGraphDeviceCodeToken -RequestedTenant $tenantToUse
         $claims = ConvertFrom-JwtPayload -Jwt $token.access_token
 
-        $actualTenantId = [string]$claims.tid
+        # Claims can vary by tenant, account type and token shape. Because the
+        # script runs with StrictMode enabled, directly reading a missing optional
+        # property (for example $claims.preferred_username) is a terminating error.
+        # Read optional claims through PSObject.Properties instead.
+        $actualTenantId = [string](
+            Get-OptionalPropertyValue -Object $claims -Name 'tid'
+        )
 
-        $actualAccount = if ($claims.preferred_username) {
-            [string]$claims.preferred_username
+        $actualAccount = $null
+
+        foreach ($claimName in @(
+            'preferred_username',
+            'upn',
+            'unique_name',
+            'email'
+        )) {
+            $claimValue = [string](
+                Get-OptionalPropertyValue -Object $claims -Name $claimName
+            )
+
+            if (-not [string]::IsNullOrWhiteSpace($claimValue)) {
+                $actualAccount = $claimValue
+                break
+            }
         }
-        elseif ($claims.upn) {
-            [string]$claims.upn
-        }
-        elseif ($claims.unique_name) {
-            [string]$claims.unique_name
-        }
-        else {
-            '<account not present in token>'
+
+        if ([string]::IsNullOrWhiteSpace($actualAccount)) {
+            $displayNameClaim = [string](
+                Get-OptionalPropertyValue -Object $claims -Name 'name'
+            )
+
+            if (-not [string]::IsNullOrWhiteSpace($displayNameClaim)) {
+                $actualAccount = $displayNameClaim
+            }
+            else {
+                $actualAccount = '<account identifier not present in token>'
+            }
         }
 
         if ([string]::IsNullOrWhiteSpace($actualTenantId)) {
