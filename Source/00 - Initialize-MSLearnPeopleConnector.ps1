@@ -714,7 +714,8 @@ user@contoso.com,00000000-0000-0000-0000-000000000000,learn-user,public-transcri
     Write-Host "Logs         : $LogsDirectory"
     Write-Host "Reports      : $ReportsDirectory"
     Write-Host ''
-    Write-Host 'Next step: run the Step 1 App Registration / Service Principal script.' -ForegroundColor Cyan
+    Write-Host 'Step 0 configuration validation/migration completed.' -ForegroundColor Cyan
+    Write-Host 'Validate SchemaVersion 2.3 before continuing with the next project step.' -ForegroundColor Cyan
 }
 catch {
     Write-Host ''
