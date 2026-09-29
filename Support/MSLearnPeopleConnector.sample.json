@@ -1,5 +1,5 @@
 {
-  "SchemaVersion": "2.2",
+  "SchemaVersion": "2.3",
   "CreatedUtc": "",
   "LastUpdatedUtc": "",
   "Application": {
@@ -55,6 +55,38 @@
       "Type": "stringCollection",
       "Labels": [
         "personCertifications"
+      ]
+    },
+    "TitleProperty": {
+      "Name": "title",
+      "Type": "string",
+      "IsRetrievable": true,
+      "Labels": [
+        "title"
+      ]
+    },
+    "UrlProperty": {
+      "Name": "sourceUrl",
+      "Type": "string",
+      "IsRetrievable": true,
+      "Labels": [
+        "url"
+      ]
+    },
+    "LastModifiedByProperty": {
+      "Name": "lastModifiedBy",
+      "Type": "string",
+      "IsRetrievable": true,
+      "Labels": [
+        "lastModifiedBy"
+      ]
+    },
+    "LastModifiedDateTimeProperty": {
+      "Name": "lastModifiedDateTime",
+      "Type": "dateTime",
+      "IsRetrievable": true,
+      "Labels": [
+        "lastModifiedDateTime"
       ]
     }
   },
