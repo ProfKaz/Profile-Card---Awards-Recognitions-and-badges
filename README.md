@@ -158,6 +158,60 @@ During the current proof-of-concept workflow, Step 1 can store a client secret i
 
 People Data Connector information is organization-visible profile data. Only ingest professional information that your organization is authorized to expose internally.
 
+## Propagation delay and direct Graph validation
+
+> [!WARNING]
+> Changes written successfully to the People Data Connector are not displayed immediately in every Microsoft 365 experience. Profile Card, People Search and Copilot propagation can take several hours and, in observed deployments, may exceed 12 hours. A delayed Profile Card update does not by itself mean that synchronization failed.
+
+Before waiting for the presentation layer, administrators can validate the profile facets directly with Microsoft Graph PowerShell. The Profile API is currently available under the Microsoft Graph `beta` endpoint.
+
+For the signed-in user:
+
+```powershell
+Connect-MgGraph `
+    -Scopes "User.Read" `
+    -NoWelcome
+
+$Certifications = Invoke-MgGraphRequest `
+    -Method GET `
+    -Uri "https://graph.microsoft.com/beta/me/profile/certifications" `
+    -OutputType PSObject
+
+$Certifications.value |
+    Select-Object `
+        id,
+        certificationId,
+        displayName,
+        issuedDate,
+        endDate |
+    Format-Table -AutoSize
+```
+
+For another user, replace `me` with `users/{id | userPrincipalName}`:
+
+```powershell
+$UserPrincipalName = "user@contoso.com"
+$EncodedUser = [Uri]::EscapeDataString($UserPrincipalName)
+
+$Certifications = Invoke-MgGraphRequest `
+    -Method GET `
+    -Uri "https://graph.microsoft.com/beta/users/$EncodedUser/profile/certifications" `
+    -OutputType PSObject
+
+$Certifications.value |
+    Select-Object `
+        id,
+        certificationId,
+        displayName,
+        issuedDate,
+        endDate |
+    Format-Table -AutoSize
+```
+
+The Microsoft Graph documentation lists delegated `User.Read` as the least-privileged permission for listing certifications. `User.ReadWrite` also satisfies the endpoint but is unnecessary for read-only validation. Depending on tenant consent policies and the wider operations being performed, an administrator may instead grant `User.Read.All`; use the least privilege that works for the intended validation.
+
+A successful Graph response confirms that the Profile API can return the facet. It does **not** guarantee that every Microsoft 365 presentation surface has completed propagation.
+
 ## Important implementation notes
 
 - The current configuration baseline is **SchemaVersion 2.3**.
