@@ -23,13 +23,18 @@ The implementation:
 2. Creates a Microsoft Entra application and service principal with the Microsoft Graph application permissions required by the connector.
 3. Creates and configures a Microsoft 365 People Data Connector with `contentCategory = people`.
 4. Registers the connector as a Microsoft 365 profile source and configures profile source precedence.
-5. Maps the connector schema to the Microsoft 365 people profile using:
+5. Maps the connector schema to Microsoft 365 using the SchemaVersion 2.3 semantic-label contract:
    - `personAccount`
    - `personCertifications`
+   - `title`
+   - `url`
+   - `lastModifiedBy`
+   - `lastModifiedDateTime`
 6. Reads enabled users from a controlled input source.
 7. Retrieves active Microsoft Learn certifications and recent Credly badges.
 8. Deduplicates overlapping credentials, preserves unmanaged profile entries, and optionally removes stale credentials managed by this solution.
-9. Produces execution logs and structured synchronization reports.
+9. Publishes source/title/update metadata together with the profile credentials and validates the external item after writing it.
+10. Produces execution logs and structured synchronization reports.
 
 ## Architecture
 
@@ -101,6 +106,8 @@ Run the scripts in this order from the operational working folder:
 & '.\03 - Sync-MSLearnCredlyPeopleProfiles.ps1'
 ```
 
+Step 00 is safe to rerun against an existing operational folder. It validates the SchemaVersion 2.3 contract, backs up the JSON before changing it, upgrades older schema contracts, and restores missing configuration properties without replacing existing operational values.
+
 Before Step 3, populate the generated user mapping file:
 
 ```text
@@ -127,6 +134,10 @@ People Data Connector information is organization-visible profile data. Only ing
 
 ## Important implementation notes
 
+- The current configuration baseline is **SchemaVersion 2.3**.
+- The default schema includes the People-specific `personAccount` and `personCertifications` labels plus `title`, `url`, `lastModifiedBy` and `lastModifiedDateTime`.
+- Step 02 reconciles schema drift for connectors in either `draft` or `ready` state. Use `-ForceSchemaUpdate` only when an explicit schema reapply is required for troubleshooting.
+- Step 03 validates the live external schema before processing users and validates semantic metadata after each external-item write.
 - The default Credly rolling window is **12 months**. This is a project configuration choice, not a Microsoft 365 limitation.
 - Microsoft Learn and Credly retrieval in this reference implementation relies on publicly accessible web endpoints. These endpoints should not be treated as contractual enterprise APIs and can change.
 - Newly ingested people data can require time to propagate into Microsoft 365 profile experiences.
@@ -141,6 +152,8 @@ People Data Connector information is organization-visible profile data. Only ing
 - [Manage profile source precedence in Microsoft 365](https://learn.microsoft.com/en-us/graph/profilepriority-configure-profilepropertysetting)
 - [People data sources in Microsoft 365](https://learn.microsoft.com/en-us/graph/people-data-sources)
 - [Microsoft Graph connectors API overview](https://learn.microsoft.com/en-us/graph/connecting-external-content-connectors-api-overview)
+- [External connector property and semantic labels](https://learn.microsoft.com/en-us/graph/api/resources/externalconnectors-property?view=graph-rest-beta)
+- [Update an external connection schema](https://learn.microsoft.com/en-us/graph/api/externalconnectors-externalconnection-patch-schema?view=graph-rest-1.0)
 - [Sharing Microsoft Credentials and Microsoft Learn transcripts](https://learn.microsoft.com/en-us/credentials/certifications/view-use-share-certificates-badges)
 
 ## Example discovery scenarios
@@ -156,4 +169,4 @@ Actual Microsoft 365 Copilot behavior depends on tenant configuration, licensing
 
 ## Visual assets
 
-The nine-slide carousel in [Assets/Carousel](Assets/Carousel) explains the business problem and the solution at a high level. It can be reused when presenting the project internally or introducing the concept to a broader technical audience.
+The [Assets/Carousel](Assets/Carousel) folder contains the visual assets currently published with the repository. The cover asset introduces the business problem and the solution at a high level; additional carousel slides can be added to that folder as they are published.
