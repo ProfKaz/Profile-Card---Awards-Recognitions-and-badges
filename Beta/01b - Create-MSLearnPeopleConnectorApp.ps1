@@ -69,7 +69,7 @@
 
 .EXAMPLE
     & '.\01b - Create-MSLearnPeopleConnectorApp.ps1' `
-        -DisplayName 'Contoso Credential Profile Connector' `
+        -DisplayName 'Contoso Credential Profile Connector Beta' `
         -SecretValidityMonths 6
 
 .NOTES
@@ -1023,6 +1023,14 @@ try {
 
     if ([string]::IsNullOrWhiteSpace($DisplayName)) {
         throw 'Application.DisplayName is empty and -DisplayName was not supplied.'
+    }
+
+    # BETA safety guard: prevent accidental reuse of the production application.
+    if ($DisplayName -notmatch '(?i)beta') {
+        throw (
+            "BETA safety guard: Application.DisplayName must contain 'Beta'. " +
+            "Current value: '$DisplayName'."
+        )
     }
 
     $configuredTenantId = [string](
