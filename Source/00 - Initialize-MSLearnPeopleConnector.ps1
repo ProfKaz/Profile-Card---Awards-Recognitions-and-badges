@@ -122,6 +122,102 @@ function Save-JsonAtomic {
     }
 }
 
+function Test-ConfigurationObject {
+    param($Value)
+
+    if ($null -eq $Value) {
+        return $false
+    }
+
+    return (
+        $Value -is [System.Collections.IDictionary] -or
+        $Value -is [PSCustomObject]
+    )
+}
+
+function Copy-ConfigurationValue {
+    param($Value)
+
+    if ($null -eq $Value) {
+        return $null
+    }
+
+    # JSON round-trip gives us a detached value so inserting defaults never
+    # mutates the in-memory base configuration object.
+    return (
+        $Value |
+            ConvertTo-Json -Depth 30 |
+            ConvertFrom-Json
+    )
+}
+
+function Add-MissingConfigurationProperties {
+    param(
+        [Parameter(Mandatory)]$Target,
+        [Parameter(Mandatory)]$Defaults,
+        [Parameter(Mandatory)][string]$Path
+    )
+
+    $AddedPaths = @()
+
+    foreach ($DefaultProperty in $Defaults.PSObject.Properties) {
+        $Name = [string]$DefaultProperty.Name
+        $DefaultValue = $DefaultProperty.Value
+        $TargetProperty = $Target.PSObject.Properties[$Name]
+        $CurrentPath = "$Path.$Name"
+
+        if ($null -eq $TargetProperty) {
+            $Target | Add-Member -NotePropertyName $Name -NotePropertyValue (Copy-ConfigurationValue -Value $DefaultValue)
+            $AddedPaths += $CurrentPath
+            continue
+        }
+
+        if (
+            (Test-ConfigurationObject -Value $DefaultValue) -and
+            (Test-ConfigurationObject -Value $TargetProperty.Value)
+        ) {
+            $AddedPaths += @(
+                Add-MissingConfigurationProperties -Target $TargetProperty.Value -Defaults $DefaultValue -Path $CurrentPath
+            )
+        }
+    }
+
+    return @($AddedPaths)
+}
+
+function Get-MissingConfigurationProperties {
+    param(
+        [Parameter(Mandatory)]$Target,
+        [Parameter(Mandatory)]$Defaults,
+        [Parameter(Mandatory)][string]$Path
+    )
+
+    $MissingPaths = @()
+
+    foreach ($DefaultProperty in $Defaults.PSObject.Properties) {
+        $Name = [string]$DefaultProperty.Name
+        $DefaultValue = $DefaultProperty.Value
+        $TargetProperty = $Target.PSObject.Properties[$Name]
+        $CurrentPath = "$Path.$Name"
+
+        if ($null -eq $TargetProperty) {
+            $MissingPaths += $CurrentPath
+            continue
+        }
+
+        if (
+            (Test-ConfigurationObject -Value $DefaultValue) -and
+            (Test-ConfigurationObject -Value $TargetProperty.Value)
+        ) {
+            $MissingPaths += @(
+                Get-MissingConfigurationProperties -Target $TargetProperty.Value -Defaults $DefaultValue -Path $CurrentPath
+            )
+        }
+    }
+
+    return @($MissingPaths)
+}
+
 function Ensure-RequiredModule {
     param([Parameter(Mandatory)][string]$Name)
 
@@ -553,59 +649,85 @@ try {
             )
         }
 
-        if ($currentSchemaVersion -lt $TargetSchemaVersion) {
-            $backup = "$ConfigPath.$(Get-Date -Format 'yyyyMMdd-HHmmss').bak"
-            Copy-Item -LiteralPath $ConfigPath -Destination $backup -Force
-            Write-WarnMessage "Existing configuration backed up to: $backup"
-
-            # Migrate only the configuration contract owned by this schema version.
-            # Tenant IDs, application IDs, secrets, connector settings, source
-            # configuration, user mappings and synchronization settings are preserved.
-            $existingConfig.SchemaVersion =
-                $TargetSchemaVersionText
-
-            $lastUpdatedProperty =
-                $existingConfig.PSObject.Properties['LastUpdatedUtc']
-
-            if ($null -eq $lastUpdatedProperty) {
-                $existingConfig |
-                    Add-Member -NotePropertyName 'LastUpdatedUtc' -NotePropertyValue ((Get-Date).ToUniversalTime().ToString('o'))
-            }
-            else {
-                $existingConfig.LastUpdatedUtc =
-                    (Get-Date).ToUniversalTime().ToString('o')
-            }
-
-            $schemaProperty =
-                $existingConfig.PSObject.Properties['Schema']
-
-            if ($null -eq $schemaProperty) {
-                $existingConfig |
-                    Add-Member -NotePropertyName 'Schema' -NotePropertyValue $baseConfig.Schema
-            }
-            else {
-                $existingConfig.Schema =
-                    $baseConfig.Schema
-            }
-
-            Save-JsonAtomic -Path $ConfigPath -Object $existingConfig
-
-            Write-Success (
-                "Operational configuration upgraded from SchemaVersion " +
-                "$currentSchemaVersionText to $TargetSchemaVersionText."
-            )
-        }
-        elseif ($currentSchemaVersion -eq $TargetSchemaVersion) {
-            Write-Success (
-                "Operational configuration already uses SchemaVersion " +
-                "$TargetSchemaVersionText. No schema migration required."
-            )
-        }
-        else {
+        if ($currentSchemaVersion -gt $TargetSchemaVersion) {
             Write-WarnMessage (
                 "Operational configuration SchemaVersion $currentSchemaVersionText is newer than " +
                 "this Step 0 target ($TargetSchemaVersionText). The file was preserved unchanged."
             )
+        }
+        else {
+            $configurationChanged = $false
+
+            if ($currentSchemaVersion -lt $TargetSchemaVersion) {
+                # Schema itself is owned by the schema contract. Upgrade it while
+                # preserving operational values elsewhere.
+                $existingConfig.SchemaVersion = $TargetSchemaVersionText
+
+                $schemaProperty = $existingConfig.PSObject.Properties['Schema']
+
+                if ($null -eq $schemaProperty) {
+                    $existingConfig | Add-Member -NotePropertyName 'Schema' -NotePropertyValue (Copy-ConfigurationValue -Value $baseConfig.Schema)
+                }
+                else {
+                    $existingConfig.Schema = Copy-ConfigurationValue -Value $baseConfig.Schema
+                }
+
+                $configurationChanged = $true
+            }
+
+            # Development-era configurations can already report the current
+            # SchemaVersion while still missing sections introduced later, such as
+            # Provisioning. Restore only missing properties; never overwrite an
+            # existing tenant ID, application ID, secret, path, source setting, or
+            # synchronization choice.
+            $addedConfigurationPaths = @(
+                Add-MissingConfigurationProperties -Target $existingConfig -Defaults $baseConfig -Path 'root'
+            )
+
+            if ($addedConfigurationPaths.Count -gt 0) {
+                $configurationChanged = $true
+                Write-InfoMessage 'Missing configuration properties detected and restored:'
+
+                foreach ($addedPath in $addedConfigurationPaths) {
+                    Write-Host "  + $addedPath" -ForegroundColor DarkGray
+                }
+            }
+
+            if ($configurationChanged) {
+                $backup = "$ConfigPath.$(Get-Date -Format 'yyyyMMdd-HHmmss').bak"
+                Copy-Item -LiteralPath $ConfigPath -Destination $backup -Force
+                Write-WarnMessage "Existing configuration backed up to: $backup"
+
+                $lastUpdatedProperty = $existingConfig.PSObject.Properties['LastUpdatedUtc']
+
+                if ($null -eq $lastUpdatedProperty) {
+                    $existingConfig | Add-Member -NotePropertyName 'LastUpdatedUtc' -NotePropertyValue ((Get-Date).ToUniversalTime().ToString('o'))
+                }
+                else {
+                    $existingConfig.LastUpdatedUtc = (Get-Date).ToUniversalTime().ToString('o')
+                }
+
+                Save-JsonAtomic -Path $ConfigPath -Object $existingConfig
+
+                if ($currentSchemaVersion -lt $TargetSchemaVersion) {
+                    Write-Success (
+                        "Operational configuration upgraded from SchemaVersion " +
+                        "$currentSchemaVersionText to $TargetSchemaVersionText and reconciled."
+                    )
+                }
+                else {
+                    Write-Success (
+                        "Operational configuration SchemaVersion $TargetSchemaVersionText " +
+                        "contract reconciled without replacing existing operational values."
+                    )
+                }
+            }
+            else {
+                Write-Success (
+                    "Operational configuration already matches SchemaVersion " +
+                    "$TargetSchemaVersionText contract. No migration required."
+                )
+            }
         }
     }
 
@@ -693,18 +815,31 @@ user@contoso.com,00000000-0000-0000-0000-000000000000,learn-user,public-transcri
         throw "Operational configuration contains an invalid SchemaVersion '$validatedSchemaVersionText'."
     }
 
-    if ($validatedSchemaVersion -ge $TargetSchemaVersion) {
-        Write-Success (
-            "Operational configuration JSON validated " +
-            "(SchemaVersion $validatedSchemaVersionText)."
-        )
-    }
-    else {
+    if ($validatedSchemaVersion -lt $TargetSchemaVersion) {
         throw (
             "Operational configuration validation failed. Expected SchemaVersion " +
             "$TargetSchemaVersionText or later but found $validatedSchemaVersionText."
         )
     }
+
+    if ($validatedSchemaVersion -eq $TargetSchemaVersion) {
+        $missingContractProperties = @(
+            Get-MissingConfigurationProperties -Target $config -Defaults $baseConfig -Path 'root'
+        )
+
+        if ($missingContractProperties.Count -gt 0) {
+            throw (
+                "Operational configuration is SchemaVersion $TargetSchemaVersionText but " +
+                "is missing required contract properties: " +
+                ($missingContractProperties -join ', ')
+            )
+        }
+    }
+
+    Write-Success (
+        "Operational configuration JSON and contract validated " +
+        "(SchemaVersion $validatedSchemaVersionText)."
+    )
 
     Write-Host ''
     Write-Host 'Initialization completed successfully.' -ForegroundColor Green
