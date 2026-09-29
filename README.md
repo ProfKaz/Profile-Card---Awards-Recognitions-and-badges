@@ -66,11 +66,34 @@ flowchart LR
 ├── Support/
 │   ├── README.md
 │   └── MSLearnPeopleConnector.sample.json
+├── Docs/
+│   └── Copilot-Prompt-Library.md
 └── Assets/
     └── Carousel/
         ├── README.md
         └── 01.svg
 ```
+
+## Business value with Microsoft 365 Copilot
+
+The value of this connector goes beyond displaying certification badges on a Microsoft 365 profile card.
+
+Microsoft documents that People Data Connectors can enrich the people context available to Microsoft 365 Copilot, Microsoft Search, profile cards and other people experiences. In this project, that means certification and recognition data can become useful organizational context for natural-language capability discovery.
+
+Once credentials are published consistently, Microsoft 365 Copilot can support scenarios such as:
+
+- **Capability discovery** – find people with a specific certification, recognition, or combination of credentials.
+- **Project staffing** – correlate customer requirements, Statements of Work or RFPs with certified capabilities represented in the organization.
+- **Proposal support** – identify credentials that can support a technical capability statement.
+- **Certification lifecycle management** – identify upcoming expirations and certification coverage that may be at risk.
+- **Partner readiness** – compare certification requirements with the people who currently satisfy them and identify remaining gaps.
+- **Workforce development** – identify adjacent credentials that can help build a training pipeline without treating those people as already qualified.
+- **Mentoring and knowledge sharing** – discover trainers, advanced credential holders and potential internal mentors.
+- **Management visibility** – summarize organizational certification coverage across Microsoft solution areas.
+
+A certification is evidence of demonstrated knowledge, not automatic proof of project experience, availability, seniority or customer-facing capability. Copilot results should therefore distinguish direct certification matches from related credentials and potential training candidates.
+
+The complete prompt library is available in **[Docs/Copilot-Prompt-Library.md](Docs/Copilot-Prompt-Library.md)**.
 
 ## Prerequisites
 
