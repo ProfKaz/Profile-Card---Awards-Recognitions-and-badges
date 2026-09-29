@@ -22,7 +22,7 @@ Those values must be generated or populated in the local operational configurati
 
 ### SchemaVersion
 
-Identifies the expected configuration contract. The current project baseline is `2.2`.
+Identifies the expected configuration contract. The current project baseline is `2.3`.
 
 ### Application
 
@@ -71,14 +71,20 @@ The following values are Microsoft profile-service constants rather than private
 
 Defines the mapping between connector properties and Microsoft 365 people profile entities.
 
-The default project schema publishes:
+The default SchemaVersion 2.3 project schema publishes:
 
 - `accountInformation` as `personAccount`
 - `certifications` as `personCertifications`
+- `title` as `title`
+- `sourceUrl` as `url`
+- `lastModifiedBy` as `lastModifiedBy`
+- `lastModifiedDateTime` as `lastModifiedDateTime`
+
+The four generic semantic properties are retrievable and are populated by Step 03 so the external item carries a human-readable title, a public source URL and synchronization provenance/timestamp metadata.
 
 ### Provisioning
 
-Controls how long Step 02 waits for the connector schema to become ready and how frequently it polls Microsoft Graph.
+Controls how long Step 02 waits for asynchronous schema provisioning/reconciliation and how frequently it polls Microsoft Graph.
 
 ### CredentialSources
 
@@ -117,5 +123,7 @@ Contains safe public documentation links. These values are informational and con
 ## Security recommendation
 
 The public sample is safe to commit because it contains no operational credentials or tenant/application identifiers.
+
+Step 00 is the authoritative generator for the local operational configuration. If an older operational JSON is reused, Step 00 can reconcile missing SchemaVersion 2.3 contract properties while preserving existing operational values and backing up the file before it is changed.
 
 The real local file `Config\MSLearnPeopleConnector.json` can contain confidential authentication data. Protect it as a secret-bearing configuration artifact and exclude it from source control.
