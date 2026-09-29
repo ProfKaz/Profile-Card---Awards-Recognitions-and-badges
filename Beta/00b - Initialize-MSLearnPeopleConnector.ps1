@@ -329,9 +329,9 @@ function New-BaseConfiguration {
             # Schema 2.4 BETA:
             # Applied Skills remain distinct from Certifications.
             AppliedSkillsProperty = [ordered]@{
-                Name          = 'microsoftAppliedSkills'
-                Type          = 'stringCollection'
-                IsRetrievable = $true
+                Name        = 'microsoftAppliedSkills'
+                Type        = 'stringCollection'
+                Description = 'Microsoft Applied Skills credentials earned by the person. Scenario-based Microsoft credentials distinct from Microsoft Certifications.'
             }
 
             # Visual projection for Profile Card validation.
