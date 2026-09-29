@@ -1,6 +1,8 @@
 # Carousel assets
 
-This folder contains the nine-slide English carousel created to introduce the project and the underlying business problem.
+This folder contains the visual assets published with the project. It is intended to host the English carousel used to introduce the project and the underlying business problem.
+
+At present, the repository includes the carousel cover asset (`01.svg`). Additional slides can be added here as they are published.
 
 The carousel focuses on:
 
