@@ -20,6 +20,8 @@ Typical business scenarios include:
 - Finding internal mentors, trainers, or subject-matter experts.
 - Creating management-level capability summaries.
 
+> **Getting inconsistent results?** Model choice, source grounding, and retrieval coverage can affect Copilot answers. See **[Tips for Getting the Most from the People Connector with Microsoft 365 Copilot](Copilot-Usage-Tips.md)** before using aggregate, expiration, or organization-wide prompts.
+
 ## Important interpretation guidance
 
 Certifications and recognitions are useful evidence of demonstrated knowledge, but they should not automatically be treated as proof of project experience, availability, seniority, or customer-facing capability.
