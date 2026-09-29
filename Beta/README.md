@@ -54,6 +54,102 @@ Do not point these scripts at the production configuration.
 7. Run `03b`.
 8. Validate Profile Card, Microsoft 365 Search and Copilot before considering any production change.
 
+## Propagation delay and direct validation
+
+> [!WARNING]
+> A successful Step 03b write is not displayed immediately in every Microsoft 365 experience. Profile Card, Microsoft 365 Search and Copilot propagation can take several hours and, in observed deployments, may exceed 12 hours. Do not rerun or redesign the connector solely because the Profile Card has not updated yet.
+
+Schema 2.4 stores the experiment in three different properties, so each layer must be validated against the correct endpoint:
+
+| Schema 2.4 property | Representation | Direct validation |
+|---|---|---|
+| `certifications` | `personCertifications` | `/users/{id-or-UPN}/profile/certifications` |
+| `appliedSkillsAwards` | `personAwards` projection | `/users/{id-or-UPN}/profile/awards` |
+| `microsoftAppliedSkills` | Custom connector property | Raw external item or Step 03b read-back/report |
+
+### Validate another user's Profile API facets
+
+Use the user's Entra object ID or user principal name in place of `me`. The following example is read-only:
+
+```powershell
+Connect-MgGraph `
+    -Scopes "User.Read" `
+    -NoWelcome
+
+$UserPrincipalName = "user@contoso.com"
+$EncodedUser = [Uri]::EscapeDataString($UserPrincipalName)
+
+$Certifications = Invoke-MgGraphRequest `
+    -Method GET `
+    -Uri "https://graph.microsoft.com/beta/users/$EncodedUser/profile/certifications" `
+    -OutputType PSObject
+
+$Awards = Invoke-MgGraphRequest `
+    -Method GET `
+    -Uri "https://graph.microsoft.com/beta/users/$EncodedUser/profile/awards" `
+    -OutputType PSObject
+
+$Certifications.value |
+    Select-Object `
+        id,
+        certificationId,
+        displayName,
+        issuedDate,
+        endDate |
+    Format-Table -AutoSize
+
+$Awards.value |
+    Select-Object `
+        id,
+        displayName,
+        issuedDate,
+        issuingAuthority,
+        webUrl |
+    Format-Table -AutoSize
+```
+
+Microsoft Graph documents delegated `User.Read` as the least-privileged permission for both list operations. `User.ReadWrite` is also accepted but is unnecessary for a read-only check. If tenant consent policy or a broader administrative validation requires it, `User.Read.All` can be used after the required administrator consent.
+
+### Validate the raw Schema 2.4 external item
+
+The custom `microsoftAppliedSkills` property is not a native Profile API certification or award facet. Validate it from the external item written by Step 03b. This requires a delegated or application permission supported by the external-item GET operation, such as `ExternalItem.Read.All`, or the connector application's existing owned-item permission.
+
+The beta script generates the external item ID from the configured prefix (default `u`) plus the user's Entra object ID with punctuation removed:
+
+```powershell
+Connect-MgGraph `
+    -Scopes "ExternalItem.Read.All" `
+    -NoWelcome
+
+$ConnectionId = "mslearncredbeta"
+$ExternalItemIdPrefix = "u"
+$EntraObjectId = "00000000-0000-0000-0000-000000000000"
+
+$ExternalItemId =
+    $ExternalItemIdPrefix +
+    ($EntraObjectId -replace "[^A-Za-z0-9]", "")
+
+$ExternalItem = Invoke-MgGraphRequest `
+    -Method GET `
+    -Uri "https://graph.microsoft.com/v1.0/external/connections/$ConnectionId/items/$ExternalItemId" `
+    -OutputType PSObject
+
+$ExternalItem.properties |
+    Select-Object `
+        certifications,
+        microsoftAppliedSkills,
+        appliedSkillsAwards,
+        title,
+        sourceUrl,
+        lastModifiedBy,
+        lastModifiedDateTime |
+    Format-List
+```
+
+`ExternalItem.Read.All` requires administrator consent. Step 03b already performs an immediate read-back after every PUT and records the result in its log/report, so that built-in validation is preferable when additional delegated consent is not desired.
+
+A successful raw-item read confirms ingestion. A successful Profile API read confirms that the semantic facet can be retrieved. Neither confirms that Profile Card, Search or Copilot propagation has finished.
+
 ## Suggested validation prompts
 
 - What Microsoft certifications does Claudio Bravo have?
