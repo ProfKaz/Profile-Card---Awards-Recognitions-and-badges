@@ -132,6 +132,8 @@
     "BuildPeopleDataConnector": "https://learn.microsoft.com/en-us/microsoft-365/copilot/extensibility/build-connectors-with-people-data",
     "ProfileSourcePrecedence": "https://learn.microsoft.com/en-us/graph/profilepriority-configure-profilepropertysetting",
     "PeopleDataSources": "https://learn.microsoft.com/en-us/graph/people-data-sources",
-    "LearnCredentialSharing": "https://learn.microsoft.com/en-us/credentials/certifications/view-use-share-certificates-badges"
+    "LearnCredentialSharing": "https://learn.microsoft.com/en-us/credentials/certifications/view-use-share-certificates-badges",
+    "ExternalConnectorPropertySemanticLabels": "https://learn.microsoft.com/en-us/graph/api/resources/externalconnectors-property?view=graph-rest-beta",
+    "UpdateExternalConnectionSchema": "https://learn.microsoft.com/en-us/graph/api/externalconnectors-externalconnection-patch-schema?view=graph-rest-1.0"
   }
 }
