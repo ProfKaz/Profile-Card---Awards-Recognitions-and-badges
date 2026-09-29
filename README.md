@@ -67,7 +67,8 @@ flowchart LR
 │   ├── README.md
 │   └── MSLearnPeopleConnector.sample.json
 ├── Docs/
-│   └── Copilot-Prompt-Library.md
+│   ├── Copilot-Prompt-Library.md
+│   └── Copilot-Usage-Tips.md
 └── Assets/
     └── Carousel/
         ├── README.md
@@ -94,6 +95,8 @@ Once credentials are published consistently, Microsoft 365 Copilot can support s
 A certification is evidence of demonstrated knowledge, not automatic proof of project experience, availability, seniority or customer-facing capability. Copilot results should therefore distinguish direct certification matches from related credentials and potential training candidates.
 
 The complete prompt library is available in **[Docs/Copilot-Prompt-Library.md](Docs/Copilot-Prompt-Library.md)**.
+
+For practical guidance on prompt grounding, model selection, retrieval coverage, expiration analysis, and the difference between semantic discovery and exhaustive reporting, see **[Docs/Copilot-Usage-Tips.md](Docs/Copilot-Usage-Tips.md)**.
 
 ## Prerequisites
 
