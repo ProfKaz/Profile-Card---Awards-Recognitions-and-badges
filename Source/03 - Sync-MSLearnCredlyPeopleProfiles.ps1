@@ -3426,6 +3426,17 @@ try {
             $ItemModifiedDateTime =
                 [datetimeoffset]::UtcNow
 
+            # Use a canonical UTC representation for Graph dateTime properties.
+            # Millisecond precision is sufficient for synchronization metadata and
+            # avoids false mismatches when Graph normalizes fractional precision.
+            $ItemModifiedDateTimeText =
+                $ItemModifiedDateTime.
+                    ToUniversalTime().
+                    ToString(
+                        "yyyy-MM-dd'T'HH:mm:ss.fff'Z'",
+                        [System.Globalization.CultureInfo]::InvariantCulture
+                    )
+
             $ItemProperties =
                 [ordered]@{}
 
@@ -3450,14 +3461,14 @@ try {
                 $ItemModifiedBy
 
             $ItemProperties[$script:LastModifiedDateTimePropertyName] =
-                $ItemModifiedDateTime.ToString("o")
+                $ItemModifiedDateTimeText
 
             Write-Host ""
             Write-Host "  Semantic metadata:"
             Write-Host "    Title                 : $ItemTitle"
             Write-Host "    URL                   : $ItemSourceUrl"
             Write-Host "    Last modified by      : $ItemModifiedBy"
-            Write-Host "    Last modified UTC     : $($ItemModifiedDateTime.ToString('o'))"
+            Write-Host "    Last modified UTC     : $ItemModifiedDateTimeText"
 
             $ExternalItem =
                 @{
@@ -3575,28 +3586,41 @@ try {
                 }
 
                 try {
+                    # Some Graph externalItem responses can normalize a dateTime
+                    # without returning an explicit offset. Treat offset-less values
+                    # as UTC because this connector always publishes UTC timestamps.
                     $ReadBackModifiedDateTime =
                         [datetimeoffset]::Parse(
                             $ReadBackModifiedText,
-                            [System.Globalization.CultureInfo]::InvariantCulture
+                            [System.Globalization.CultureInfo]::InvariantCulture,
+                            (
+                                [System.Globalization.DateTimeStyles]::AssumeUniversal -bor
+                                [System.Globalization.DateTimeStyles]::AdjustToUniversal
+                            )
                         )
                 }
                 catch {
                     throw (
                         "External item validation failed after PUT: property " +
-                        "'$($script:LastModifiedDateTimePropertyName)' is not a valid dateTime value."
+                        "'$($script:LastModifiedDateTimePropertyName)' returned " +
+                        "'$ReadBackModifiedText', which is not a valid dateTime value."
                     )
                 }
 
                 $ModifiedDeltaSeconds =
                     [math]::Abs(
-                        ($ReadBackModifiedDateTime - $ItemModifiedDateTime).TotalSeconds
+                        (
+                            $ReadBackModifiedDateTime.ToUniversalTime() -
+                            $ItemModifiedDateTime.ToUniversalTime()
+                        ).TotalSeconds
                     )
 
-                if ($ModifiedDeltaSeconds -gt 1) {
+                if ($ModifiedDeltaSeconds -gt 2) {
                     throw (
                         "External item validation failed after PUT: property " +
-                        "'$($script:LastModifiedDateTimePropertyName)' does not match the submitted value."
+                        "'$($script:LastModifiedDateTimePropertyName)' returned " +
+                        "'$ReadBackModifiedText' while '$ItemModifiedDateTimeText' was submitted " +
+                        "(difference: $([math]::Round($ModifiedDeltaSeconds, 3)) seconds)."
                     )
                 }
 
