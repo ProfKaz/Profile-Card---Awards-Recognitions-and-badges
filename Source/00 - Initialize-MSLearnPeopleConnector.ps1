@@ -535,6 +535,16 @@ try {
 
     $baseConfig = New-BaseConfiguration -ProjectRoot $RootPath
 
+    # New-BaseConfiguration intentionally uses [ordered] dictionaries so the JSON
+    # is emitted in a predictable order. For recursive contract comparison, first
+    # normalize that object through JSON into PSCustomObject. Enumerating
+    # OrderedDictionary.PSObject.Properties exposes adapter members such as Count,
+    # Keys, Values and SyncRoot instead of only the configuration keys.
+    $baseContract =
+        $baseConfig |
+            ConvertTo-Json -Depth 30 |
+            ConvertFrom-Json
+
     # Keep the reference template aligned with the latest configuration contract.
     # The template contains no operational secrets, so an older template can be
     # safely refreshed in place.
@@ -658,6 +668,45 @@ try {
         else {
             $configurationChanged = $false
 
+            # Cleanup for a short-lived Step 0 implementation that recursively
+            # enumerated OrderedDictionary adapter members rather than configuration
+            # keys. If that build was executed, it could persist these root-level
+            # JSON properties. They are not part of any supported configuration
+            # contract and must be removed before reconciliation.
+            $adapterArtifactNames = @(
+                'Count',
+                'IsReadOnly',
+                'Keys',
+                'Values',
+                'IsFixedSize',
+                'SyncRoot',
+                'IsSynchronized'
+            )
+
+            $removedAdapterArtifacts = @()
+
+            foreach ($artifactName in $adapterArtifactNames) {
+                $artifactProperty =
+                    $existingConfig.PSObject.Properties[$artifactName]
+
+                if ($null -ne $artifactProperty) {
+                    $existingConfig.PSObject.Properties.Remove($artifactName)
+                    $removedAdapterArtifacts += "root.$artifactName"
+                    $configurationChanged = $true
+                }
+            }
+
+            if ($removedAdapterArtifacts.Count -gt 0) {
+                Write-WarnMessage (
+                    "Removed invalid configuration artifacts created by an earlier " +
+                    "Step 0 contract-reconciliation build:"
+                )
+
+                foreach ($artifactPath in $removedAdapterArtifacts) {
+                    Write-Host "  - $artifactPath" -ForegroundColor DarkGray
+                }
+            }
+
             if ($currentSchemaVersion -lt $TargetSchemaVersion) {
                 # Schema itself is owned by the schema contract. Upgrade it while
                 # preserving operational values elsewhere.
@@ -666,10 +715,10 @@ try {
                 $schemaProperty = $existingConfig.PSObject.Properties['Schema']
 
                 if ($null -eq $schemaProperty) {
-                    $existingConfig | Add-Member -NotePropertyName 'Schema' -NotePropertyValue (Copy-ConfigurationValue -Value $baseConfig.Schema)
+                    $existingConfig | Add-Member -NotePropertyName 'Schema' -NotePropertyValue (Copy-ConfigurationValue -Value $baseContract.Schema)
                 }
                 else {
-                    $existingConfig.Schema = Copy-ConfigurationValue -Value $baseConfig.Schema
+                    $existingConfig.Schema = Copy-ConfigurationValue -Value $baseContract.Schema
                 }
 
                 $configurationChanged = $true
@@ -681,7 +730,7 @@ try {
             # existing tenant ID, application ID, secret, path, source setting, or
             # synchronization choice.
             $addedConfigurationPaths = @(
-                Add-MissingConfigurationProperties -Target $existingConfig -Defaults $baseConfig -Path 'root'
+                Add-MissingConfigurationProperties -Target $existingConfig -Defaults $baseContract -Path 'root'
             )
 
             if ($addedConfigurationPaths.Count -gt 0) {
@@ -824,7 +873,7 @@ user@contoso.com,00000000-0000-0000-0000-000000000000,learn-user,public-transcri
 
     if ($validatedSchemaVersion -eq $TargetSchemaVersion) {
         $missingContractProperties = @(
-            Get-MissingConfigurationProperties -Target $config -Defaults $baseConfig -Path 'root'
+            Get-MissingConfigurationProperties -Target $config -Defaults $baseContract -Path 'root'
         )
 
         if ($missingContractProperties.Count -gt 0) {
