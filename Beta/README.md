@@ -19,6 +19,8 @@ Applied Skills are **not** written to `personCertifications` by the beta code.
 
 The custom property stores one YAML-like text block per Applied Skill with the credential type, display name, credential ID, issue date, issuer, source and public transcript URL.
 
+Its schema description explicitly states that these are scenario-based Microsoft credentials distinct from Microsoft Certifications. This description is intentional metadata for Copilot/Search reasoning.
+
 ## Isolation controls
 
 The beta defaults are different from production:
