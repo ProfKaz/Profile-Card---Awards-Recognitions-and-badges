@@ -60,7 +60,7 @@
     "AppliedSkillsProperty": {
       "Name": "microsoftAppliedSkills",
       "Type": "stringCollection",
-      "IsRetrievable": true
+      "Description": "Microsoft Applied Skills credentials earned by the person. Scenario-based Microsoft credentials distinct from Microsoft Certifications."
     },
     "AppliedSkillsAwardsProperty": {
       "Name": "appliedSkillsAwards",
