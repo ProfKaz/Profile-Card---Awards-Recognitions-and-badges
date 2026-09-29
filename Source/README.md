@@ -31,6 +31,8 @@ The initialization script:
 
 Existing operational files are preserved by default unless one of the explicit reset switches is used.
 
+The current configuration baseline is **SchemaVersion 2.3**. When Step 00 encounters an older or incomplete configuration, it creates a backup, upgrades the schema contract when required, and restores missing configuration properties without replacing existing tenant/application/source/synchronization values.
+
 ## Step 01 – Entra application and service principal
 
 Step 01 creates the security principal used by Steps 02 and 03.
@@ -64,18 +66,25 @@ It:
 - Authenticates app-only to Microsoft Graph.
 - Creates or validates the configured external connection.
 - Enforces `contentCategory = people`.
-- Registers the configured People Data schema while the connection is in draft.
-- Waits until schema provisioning completes.
+- Reconciles schema drift while the connection is in either `draft` or `ready` state.
+- Preserves schema properties that are not owned by the current project contract.
+- Waits for asynchronous schema operations and final schema convergence when an update is required.
 - Registers the connector as a Microsoft 365 profile source.
 - Configures profile source precedence.
 - Performs final validation without inserting demonstration/test user data.
 
-The default schema uses:
+The SchemaVersion 2.3 default schema uses:
 
 | Connector property | Type | Microsoft 365 label |
 |---|---|---|
 | `accountInformation` | `string` | `personAccount` |
 | `certifications` | `stringCollection` | `personCertifications` |
+| `title` | `string` | `title` |
+| `sourceUrl` | `string` | `url` |
+| `lastModifiedBy` | `string` | `lastModifiedBy` |
+| `lastModifiedDateTime` | `dateTime` | `lastModifiedDateTime` |
+
+Normally Step 02 updates the schema only when drift is detected. The optional `-ForceSchemaUpdate` switch is intended for explicit troubleshooting/reapply scenarios.
 
 ## Step 03 – Microsoft Learn and Credly synchronization
 
@@ -83,6 +92,7 @@ Step 03 also reads its operational settings from the centralized JSON.
 
 For each enabled user, it can:
 
+- Validate that the live external schema matches the SchemaVersion 2.3 contract before processing users.
 - Resolve Microsoft Learn profile/transcript information.
 - Publish active Microsoft certifications.
 - Retrieve public/accepted Credly badges within the configured rolling window.
@@ -90,11 +100,17 @@ For each enabled user, it can:
 - Merge managed credentials with existing profile data.
 - Preserve unmanaged profile entries.
 - Remove stale credentials previously managed by this solution when configured to do so.
+- Publish semantic metadata:
+  - `title`: Microsoft Learn display name, with UPN fallback.
+  - `sourceUrl`: Microsoft Learn public transcript URL, with Credly public profile fallback.
+  - `lastModifiedBy`: connector application display name.
+  - `lastModifiedDateTime`: UTC synchronization timestamp.
+- Read the external item back after PUT and validate the semantic metadata.
 - Continue processing other users after a per-user error when configured.
 - Support dry-run behavior for validation.
 - Write detailed logs and JSON reports.
 
-The default Credly window is 12 months.
+The default Credly window is 12 months. The value is configurable and is a project choice rather than a Microsoft 365 platform limit.
 
 ## User mapping
 
