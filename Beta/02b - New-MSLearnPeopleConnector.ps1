@@ -247,6 +247,15 @@ function Convert-ActualSchemaPropertyToBody {
         type = [string](Get-BagValue -Object $Property -Name "type")
     }
 
+    if (Test-BagHasValue -Object $Property -Name "description") {
+        $DescriptionValue =
+            [string](Get-BagValue -Object $Property -Name "description")
+
+        if (-not [string]::IsNullOrWhiteSpace($DescriptionValue)) {
+            $Body["description"] = $DescriptionValue
+        }
+    }
+
     foreach ($AttributeName in @(
         "isSearchable",
         "isRetrievable",
@@ -315,6 +324,20 @@ function Get-SchemaDifferences {
 
         if ($DesiredType -ine $ActualType) {
             $Differences += "Property '$DesiredName' type is '$ActualType'; expected '$DesiredType'."
+        }
+
+        if (Test-BagHasValue -Object $DesiredProperty -Name "description") {
+            $DesiredDescription =
+                [string](Get-BagValue -Object $DesiredProperty -Name "description")
+
+            $ActualDescription =
+                [string](Get-BagValue -Object $ActualProperty -Name "description")
+
+            if ($DesiredDescription -ne $ActualDescription) {
+                $Differences += (
+                    "Property '$DesiredName' description does not match the configured SchemaVersion contract."
+                )
+            }
         }
 
         if (Test-BagHasValue -Object $DesiredProperty -Name "labels") {
@@ -828,6 +851,15 @@ try {
         $PropertyBody = [ordered]@{
             name = $PropertyName
             type = $PropertyType
+        }
+
+        $Description =
+            [string](Get-OptionalConfigProperty `
+                -Object $Property `
+                -PropertyName "Description")
+
+        if (-not [string]::IsNullOrWhiteSpace($Description)) {
+            $PropertyBody["description"] = $Description
         }
 
         $Labels = Get-OptionalConfigProperty -Object $Property -PropertyName "Labels"
