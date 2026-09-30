@@ -1,6 +1,6 @@
 # Source
 
-This folder contains the four PowerShell scripts that implement the solution.
+This folder contains the five PowerShell scripts that implement the solution.
 
 The scripts are intentionally separated from operational configuration, user mappings, logs and reports. For a real deployment, copy the four scripts to a dedicated working directory such as `C:\MyDev\MSLearn` and run them there.
 
@@ -12,6 +12,7 @@ The scripts are intentionally separated from operational configuration, user map
 | 01 | `01 - Create-MSLearnPeopleConnectorApp.ps1` | Creates the Microsoft Entra app registration and service principal, configures required Microsoft Graph application permissions, creates the authentication credential and updates the centralized JSON. |
 | 02 | `02 - New-MSLearnPeopleConnector.ps1` | Creates/validates the Microsoft 365 People Data Connector, registers its schema, registers the connector as a profile source and configures source precedence. |
 | 03 | `03 - Sync-MSLearnCredlyPeopleProfiles.ps1` | Reads configured users, retrieves Microsoft Learn and Credly credentials, deduplicates/merges data and publishes the resulting credentials to Microsoft 365 profiles. |
+| 99 | `99 - Test-MSLearnProfileSchemaPopulation.ps1` | Validates raw connector population and Profile API materialization for every enabled CSV user, one selected user, or an aggregate summary. |
 
 ## Step 00 – Initialize
 
@@ -112,6 +113,18 @@ For each enabled user, it can:
 
 The default Credly window is 12 months. The value is configurable and is a project choice rather than a Microsoft 365 platform limit.
 
+## Step 99 – Schema population validation
+
+Step 99 is a read-only operational validator for the data written by Step 03. It reads the configured CSV and offers three interactive modes:
+
+1. Detailed validation for every enabled user.
+2. Detailed validation for one selected user.
+3. A summary table and aggregate totals for every enabled user.
+
+The script deliberately validates two layers. It first connects app-only with the connector application to read each raw `externalItem`, including `certifications` and, when present in Schema 2.4, `microsoftAppliedSkills` and `appliedSkillsAwards`. It then requests a delegated sign-in with `User.Read` and reads `/profile/certifications` plus `/profile/awards`.
+
+This distinction separates successful connector ingestion from delayed Microsoft 365 profile materialization. `Match` means the Profile API facet counts equal the corresponding external-item counts; `Pending` normally means the connector item is populated but one or both profile facets have not fully materialized. The script accepts `-ConfigPath` and otherwise discovers the production and Beta operational JSON files under `Config`.
+
 ## User mapping
 
 The default CSV contract is:
@@ -132,6 +145,7 @@ C:\MyDev\MSLearn
 ├── 01 - Create-MSLearnPeopleConnectorApp.ps1
 ├── 02 - New-MSLearnPeopleConnector.ps1
 ├── 03 - Sync-MSLearnCredlyPeopleProfiles.ps1
+├── 99 - Test-MSLearnProfileSchemaPopulation.ps1
 ├── Config/
 ├── Data/
 ├── Logs/
