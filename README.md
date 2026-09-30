@@ -1,8 +1,31 @@
-# Microsoft 365 Profile Card – Awards, Recognitions and Badges
+# M365 Profile Card Awards
 
-> Surface verified professional credentials from Microsoft Learn and Credly in Microsoft 365 profile cards, and make organizational capabilities easier to discover.
+> Surface verified professional credentials and recognitions from Microsoft Learn and Credly in Microsoft 365 profile cards, Microsoft Search and Microsoft 365 Copilot.
 
 ![Skills visibility carousel cover](Assets/Carousel/01.svg)
+
+## Project identity
+
+The project uses a source-neutral brand so that Microsoft Learn, Credly and future credential providers remain data sources rather than defining the connector itself.
+
+| Component | Name |
+|---|---|
+| Project | **M365 Profile Card Awards** |
+| Entra application / service principal | **M365 Profile Card Awards Connector** |
+| Microsoft 365 / Copilot connection | **M365 Profile Card Awards** |
+| Production connection ID | `mslearncred` (preserved for compatibility) |
+| Beta connection | **M365 Profile Card Awards Beta** |
+| Beta connection ID | `mslearncredbeta` (preserved for isolation) |
+
+The stable connection IDs are intentionally retained to avoid unnecessary migration of existing deployments. Branding is applied through the application display name and connection display name.
+
+### Copilot visibility
+
+For this solution, **Copilot Visibility should be set to On** after the connection is provisioned so that connector content can participate in Copilot Chat and search experiences. The current scripts treat this as a documented post-deployment setting rather than calling an undocumented Microsoft Graph property.
+
+After Step 02, validate the setting in:
+
+`Microsoft 365 admin center > Copilot > Connectors > Your connections > M365 Profile Card Awards > Copilot Visibility > On`
 
 ## Why this project exists
 
