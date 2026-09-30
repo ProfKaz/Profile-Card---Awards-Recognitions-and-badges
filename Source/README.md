@@ -2,7 +2,7 @@
 
 This folder contains the five PowerShell scripts that implement the solution.
 
-The scripts are intentionally separated from operational configuration, user mappings, logs and reports. For a real deployment, copy the four scripts to a dedicated working directory such as `C:\MyDev\MSLearn` and run them there.
+The scripts are intentionally separated from operational configuration, user mappings, logs and reports. For a real deployment, copy the five scripts to a dedicated working directory such as `C:\MyDev\MSLearn` and run them there.
 
 ## Execution order
 
