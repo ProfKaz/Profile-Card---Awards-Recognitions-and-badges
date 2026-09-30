@@ -61,34 +61,12 @@ function Resolve-OperationalConfigPath {
         return $Resolved
     }
 
-    $Candidates = @(
-        @(
-            (Join-Path $PSScriptRoot "Config\MSLearnPeopleConnector.json")
-            (Join-Path $PSScriptRoot "Config\MSLearnPeopleConnector.beta.json")
-        ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
-    )
-
-    if ($Candidates.Count -eq 0) {
-        throw "No operational configuration was found under '$PSScriptRoot\Config'. Use -ConfigPath."
+    $BetaPath = Join-Path $PSScriptRoot "Config\MSLearnPeopleConnector.beta.json"
+    if (-not (Test-Path -LiteralPath $BetaPath -PathType Leaf)) {
+        throw "Beta configuration was not found: $BetaPath. Use -ConfigPath only for another Schema 2.4 Beta operational path."
     }
 
-    if ($Candidates.Count -eq 1) {
-        return $Candidates[0]
-    }
-
-    Write-Host "Available configurations:" -ForegroundColor Yellow
-    for ($Index = 0; $Index -lt $Candidates.Count; $Index++) {
-        Write-Host "  [$($Index + 1)] $($Candidates[$Index])"
-    }
-
-    do {
-        $Selection = Read-Host "Select the configuration to validate"
-        $Parsed = 0
-        $Valid = [int]::TryParse($Selection, [ref]$Parsed) -and
-            $Parsed -ge 1 -and $Parsed -le $Candidates.Count
-    } until ($Valid)
-
-    return $Candidates[$Parsed - 1]
+    return $BetaPath
 }
 
 function Resolve-OperationalPath {
@@ -274,7 +252,7 @@ function Get-ProfileValidationAccessToken {
         -ContentType 'application/x-www-form-urlencoded' `
         -Body @{
             client_id = $script:GraphPowerShellClientId
-            scope     = 'https://graph.microsoft.com/User.Read openid profile'
+            scope     = 'https://graph.microsoft.com/User.Read.All openid profile'
         } `
         -ErrorAction Stop
 
@@ -331,7 +309,14 @@ function Get-ProfileValidationAccessToken {
             $TokenStatusCode -lt 300 -and
             -not [string]::IsNullOrWhiteSpace($AccessTokenValue)
         ) {
+            $Claims = ConvertFrom-JwtPayload -Jwt $AccessTokenValue
+            $DelegatedScopes = [string](Get-OptionalPropertyValue $Claims 'scp')
+            if (($DelegatedScopes -split ' ') -notcontains 'User.Read.All') {
+                throw "The delegated token does not contain User.Read.All. Scopes returned: $DelegatedScopes"
+            }
+
             Write-Host '[OK] Delegated authentication completed.' -ForegroundColor Green
+            Write-Host "Delegated scopes         : $DelegatedScopes"
             return $AccessTokenValue
         }
 
@@ -349,6 +334,24 @@ function Get-ProfileValidationAccessToken {
     }
 
     throw 'The Device Code expired before authentication was completed.'
+}
+
+function ConvertFrom-JwtPayload {
+    param([Parameter(Mandatory)][string]$Jwt)
+
+    $Parts = $Jwt.Split('.')
+    if ($Parts.Count -lt 2) {
+        throw 'The delegated access token is not a valid JWT.'
+    }
+
+    $Payload = $Parts[1].Replace('-', '+').Replace('_', '/')
+    switch ($Payload.Length % 4) {
+        2 { $Payload += '==' }
+        3 { $Payload += '=' }
+    }
+
+    $Bytes = [Convert]::FromBase64String($Payload)
+    return ([Text.Encoding]::UTF8.GetString($Bytes) | ConvertFrom-Json)
 }
 
 function Get-ProfileGraphCollection {
@@ -376,7 +379,12 @@ function Get-ProfileGraphCollection {
             $GraphError = Get-OptionalPropertyValue $Response 'error'
             $ErrorCode = [string](Get-OptionalPropertyValue $GraphError 'code')
             $ErrorMessage = [string](Get-OptionalPropertyValue $GraphError 'message')
-            throw "Profile API HTTP $StatusCode - $ErrorCode - $ErrorMessage"
+            $PermissionHint = if ($StatusCode -eq 403) {
+                ' Verify that User.Read.All has tenant admin consent and that the delegated account belongs to the target tenant.'
+            }
+            else { '' }
+
+            throw "Profile API HTTP $StatusCode - $ErrorCode - $ErrorMessage.$PermissionHint"
         }
 
         $Items += @($Response.value)
@@ -590,10 +598,14 @@ function Select-ValidationMode {
 }
 
 try {
-    Write-Section 'STEP 99 - Schema population validation'
+    Write-Section 'STEP 99b - Beta Schema 2.4 population validation'
 
     $ConfigPath = Resolve-OperationalConfigPath $ConfigPath
     $Config = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+
+    if ([string]$Config.SchemaVersion -ne '2.4') {
+        throw "Step 99b requires SchemaVersion 2.4. Current value: '$($Config.SchemaVersion)'."
+    }
 
     $Application = Get-RequiredPropertyValue $Config 'Application' 'root'
     $Authentication = Get-RequiredPropertyValue $Config 'Authentication' 'root'
@@ -609,6 +621,10 @@ try {
     $GraphV1 = [string](Get-RequiredPropertyValue $Graph 'GraphV1' 'MicrosoftGraph')
     $GraphBeta = [string](Get-RequiredPropertyValue $Graph 'GraphBeta' 'MicrosoftGraph')
     $ConnectionId = [string](Get-RequiredPropertyValue $Connector 'ConnectionId' 'Connector')
+
+    if ($ConnectionId -notmatch 'beta') {
+        throw "Step 99b requires an isolated Beta connection ID. Current value: '$ConnectionId'."
+    }
 
     $CsvPathValue = Get-OptionalPropertyValue $UserSource 'CsvPath'
     if ([string]::IsNullOrWhiteSpace([string]$CsvPathValue)) {
