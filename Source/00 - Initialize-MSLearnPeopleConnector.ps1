@@ -268,7 +268,7 @@ function New-BaseConfiguration {
         LastUpdatedUtc = $now
 
         Application = [ordered]@{
-            DisplayName              = 'MSLearn People Connector'
+            DisplayName              = 'M365 Profile Card Awards Connector'
             TenantId                 = ''
             ClientId                 = ''
             ApplicationObjectId      = ''
@@ -302,13 +302,14 @@ function New-BaseConfiguration {
 
         Connector = [ordered]@{
             ConnectionId          = 'mslearncred'
-            ConnectionName        = 'Microsoft Learn Credentials'
-            ConnectionDescription = 'Microsoft Learn and Credly credentials for Microsoft 365 people profiles.'
+            ConnectionName        = 'M365 Profile Card Awards'
+            ConnectionDescription = 'Professional credentials and recognitions from Microsoft Learn and Credly for Microsoft 365 profile cards, Search and Copilot.'
             ContentCategory       = 'people'
             ProfileSourceKind     = 'MicrosoftLearn'
             ProfileSourceWebUrl   = 'https://learn.microsoft.com/'
             ProfilePropertySettingId = '00000000-0000-0000-0000-000000000001'
             EntraIdSourceId          = '4ce763dd-9214-4eff-af7c-da491cc3782d'
+            CopilotVisibilityRecommended = 'On'
         }
 
         Schema = [ordered]@{
