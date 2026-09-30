@@ -89,7 +89,8 @@ flowchart LR
 │   ├── 00 - Initialize-MSLearnPeopleConnector.ps1
 │   ├── 01 - Create-MSLearnPeopleConnectorApp.ps1
 │   ├── 02 - New-MSLearnPeopleConnector.ps1
-│   └── 03 - Sync-MSLearnCredlyPeopleProfiles.ps1
+│   ├── 03 - Sync-MSLearnCredlyPeopleProfiles.ps1
+│   └── 99 - Test-MSLearnProfileSchemaPopulation.ps1
 ├── Support/
 │   ├── README.md
 │   └── MSLearnPeopleConnector.sample.json
@@ -145,7 +146,7 @@ The Step 0 script validates the Microsoft Graph PowerShell modules required by t
 
 The `Source` folder is a distribution folder. Keep it clean.
 
-Copy the four scripts into a dedicated operational folder before running them, for example:
+Copy the five scripts into a dedicated operational folder before running them, for example:
 
 ```text
 C:\MyDev\MSLearn
@@ -162,6 +163,7 @@ Run the scripts in this order from the operational working folder:
 & '.\01 - Create-MSLearnPeopleConnectorApp.ps1'
 & '.\02 - New-MSLearnPeopleConnector.ps1'
 & '.\03 - Sync-MSLearnCredlyPeopleProfiles.ps1'
+& '.\99 - Test-MSLearnProfileSchemaPopulation.ps1'
 ```
 
 Step 00 is safe to rerun against an existing operational folder. It validates the SchemaVersion 2.3 contract, backs up the JSON before changing it, upgrades older schema contracts, and restores missing configuration properties without replacing existing operational values.
@@ -195,7 +197,7 @@ People Data Connector information is organization-visible profile data. Only ing
 > [!WARNING]
 > Changes written successfully to the People Data Connector are not displayed immediately in every Microsoft 365 experience. Profile Card, People Search and Copilot propagation can take several hours and, in observed deployments, may exceed 12 hours. A delayed Profile Card update does not by itself mean that synchronization failed.
 
-Before waiting for the presentation layer, administrators can validate the profile facets directly with Microsoft Graph PowerShell. The Profile API is currently available under the Microsoft Graph `beta` endpoint.
+Before waiting for the presentation layer, run `99 - Test-MSLearnProfileSchemaPopulation.ps1`. It reads the configured CSV and compares raw connector population with the Profile API for every enabled user, one selected user, or an aggregate summary. Administrators can also validate individual profile facets directly with Microsoft Graph PowerShell. The Profile API is currently available under the Microsoft Graph `beta` endpoint.
 
 For the signed-in user:
 
