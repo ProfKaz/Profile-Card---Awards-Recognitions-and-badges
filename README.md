@@ -205,7 +205,7 @@ People Data Connector information is organization-visible profile data. Only ing
 > [!WARNING]
 > Changes written successfully to the People Data Connector are not displayed immediately in every Microsoft 365 experience. Profile Card, People Search and Copilot propagation can take several hours and, in observed deployments, may exceed 12 hours. A delayed Profile Card update does not by itself mean that synchronization failed.
 
-Before waiting for the presentation layer, run `99 - Test-MSLearnProfileSchemaPopulation.ps1`. It reads the configured CSV and compares raw connector population with the Profile API for every enabled user, one selected user, or an aggregate summary. Administrators can also validate individual profile facets directly with Microsoft Graph PowerShell. The Profile API is currently available under the Microsoft Graph `beta` endpoint.
+Before waiting for the presentation layer, run `99 - Test-MSLearnProfileSchemaPopulation.ps1`. It reads the configured CSV and compares raw connector population with the Profile API for every enabled user, one selected user, or an aggregate summary. Raw external items are connection-specific, while the Profile API represents the composed user profile and can contain data from multiple sources. The validator therefore checks that each expected connector item is present and allows additional profile data from other sources. Administrators can also validate individual profile facets directly with Microsoft Graph PowerShell. The Profile API is currently available under the Microsoft Graph `beta` endpoint.
 
 For the signed-in user:
 
