@@ -26,7 +26,8 @@ Its schema description explicitly states that these are scenario-based Microsoft
 The beta defaults are different from production:
 
 - Schema version: `2.4`
-- Application display name: `MSLearn People Connector Beta`
+- Application display name: `M365 Profile Card Awards Connector Beta`
+- Connection display name: `M365 Profile Card Awards Beta`
 - Connection ID: `mslearncredbeta`
 - Configuration file: `Config/MSLearnPeopleConnector.beta.json`
 - User file: `Data/CredentialUsers.beta.csv`
@@ -34,6 +35,16 @@ The beta defaults are different from production:
 Steps 02b and 03b stop if `Connector.ConnectionId` does not contain `beta`.
 
 Do not point these scripts at the production configuration.
+
+## Copilot visibility
+
+The recommended setting for the beta connection is **On** while validating Microsoft Search and Copilot retrieval. Step 02b prints a post-deployment reminder because the current implementation does not rely on an undocumented Graph property to change this control.
+
+Validate manually in:
+
+`Microsoft 365 admin center > Copilot > Connectors > Your connections > M365 Profile Card Awards Beta > Copilot Visibility > On`
+
+Keep access to the beta connection limited to the intended test population and tenant controls.
 
 ## Files
 
