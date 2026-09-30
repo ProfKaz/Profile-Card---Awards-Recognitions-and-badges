@@ -56,6 +56,7 @@ Keep access to the beta connection limited to the intended test population and t
 - `01b - Create-MSLearnPeopleConnectorApp.ps1`
 - `02b - New-MSLearnPeopleConnector.ps1`
 - `03b - Sync-MSLearnCredlyPeopleProfiles.ps1`
+- `99b - Test-MSLearnProfileSchemaPopulation.ps1`
 - `MSLearnPeopleConnector.beta.sample.json`
 
 ## Execution order
@@ -67,12 +68,15 @@ Keep access to the beta connection limited to the intended test population and t
 5. Grant the requested Graph application permissions/admin consent.
 6. Run `02b` to create the `mslearncredbeta` connector with Schema 2.4.
 7. Run `03b`.
-8. Validate Profile Card, Microsoft 365 Search and Copilot before considering any production change.
+8. Run `99b` to compare raw Schema 2.4 population with the Profile API facets.
+9. Validate Profile Card, Microsoft 365 Search and Copilot before considering any production change.
 
 ## Propagation delay and direct validation
 
 > [!WARNING]
 > A successful Step 03b write is not displayed immediately in every Microsoft 365 experience. Profile Card, Microsoft 365 Search and Copilot propagation can take several hours and, in observed deployments, may exceed 12 hours. Do not rerun or redesign the connector solely because the Profile Card has not updated yet.
+
+Run `99b - Test-MSLearnProfileSchemaPopulation.ps1` for the repeatable validation workflow. It reads `Data/CredentialUsers.beta.csv` and can show every enabled user, one selected user, or an aggregate count summary.
 
 Schema 2.4 stores the experiment in three different properties, so each layer must be validated against the correct endpoint:
 
