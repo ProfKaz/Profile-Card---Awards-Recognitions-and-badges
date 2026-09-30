@@ -123,7 +123,9 @@ Step 99 is a read-only operational validator for the data written by Step 03. It
 
 The script deliberately validates two layers. It first connects app-only with the connector application to read each raw `externalItem`, including `certifications` and, when present in Schema 2.4, `microsoftAppliedSkills` and `appliedSkillsAwards`. It then requests a delegated sign-in with `User.Read` and reads `/profile/certifications` plus `/profile/awards`.
 
-This distinction separates successful connector ingestion from delayed Microsoft 365 profile materialization. `Match` means the Profile API facet counts equal the corresponding external-item counts; `Pending` normally means the connector item is populated but one or both profile facets have not fully materialized. The script accepts `-ConfigPath` and otherwise discovers the production and Beta operational JSON files under `Config`.
+This distinction separates successful connector ingestion from delayed Microsoft 365 profile materialization. Because the Profile API returns the composed user profile rather than a connection-specific view, Step 99 compares credential identities instead of requiring equal counts. `Materialized` means every item from the selected connector exists in the shared profile facets, `Pending` means at least one expected item is missing, `OtherSourceData` means the selected connector has no items while the shared profile contains data from another source, and `NoData` means neither layer contains profile facet data. The script accepts `-ConfigPath` and otherwise discovers the production and Beta operational JSON files under `Config`.
+
+For delegated Profile API validation, Step 99 obtains a fresh `User.Read` device-code token and calls the REST endpoints directly. This avoids switching the Microsoft Graph PowerShell SDK from app-only to delegated authentication in the same persisted MSAL session.
 
 ## User mapping
 
