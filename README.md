@@ -62,7 +62,6 @@ The implementation:
 8. Deduplicates overlapping credentials, preserves unmanaged profile entries, and optionally removes stale credentials managed by this solution.
 9. Publishes source/title/update metadata together with the profile credentials and validates the external item after writing it.
 10. Produces execution logs and structured synchronization reports.
-11. Validates raw connector population against the materialized Profile API facets for all users or a selected user.
 
 ## Architecture
 
@@ -90,8 +89,7 @@ flowchart LR
 │   ├── 00 - Initialize-MSLearnPeopleConnector.ps1
 │   ├── 01 - Create-MSLearnPeopleConnectorApp.ps1
 │   ├── 02 - New-MSLearnPeopleConnector.ps1
-│   ├── 03 - Sync-MSLearnCredlyPeopleProfiles.ps1
-│   └── 99 - Test-MSLearnProfileSchemaPopulation.ps1
+│   └── 03 - Sync-MSLearnCredlyPeopleProfiles.ps1
 ├── Beta/
 │   ├── README.md
 │   ├── 00b - Initialize-MSLearnPeopleConnector.ps1
@@ -154,7 +152,7 @@ The Step 0 script validates the Microsoft Graph PowerShell modules required by t
 
 The `Source` folder is a distribution folder. Keep it clean.
 
-Copy the five scripts into a dedicated operational folder before running them, for example:
+Copy the four scripts into a dedicated operational folder before running them, for example:
 
 ```text
 C:\MyDev\MSLearn
@@ -171,7 +169,6 @@ Run the scripts in this order from the operational working folder:
 & '.\01 - Create-MSLearnPeopleConnectorApp.ps1'
 & '.\02 - New-MSLearnPeopleConnector.ps1'
 & '.\03 - Sync-MSLearnCredlyPeopleProfiles.ps1'
-& '.\99 - Test-MSLearnProfileSchemaPopulation.ps1'
 ```
 
 Step 00 is safe to rerun against an existing operational folder. It validates the SchemaVersion 2.3 contract, backs up the JSON before changing it, upgrades older schema contracts, and restores missing configuration properties without replacing existing operational values.
@@ -205,7 +202,7 @@ People Data Connector information is organization-visible profile data. Only ing
 > [!WARNING]
 > Changes written successfully to the People Data Connector are not displayed immediately in every Microsoft 365 experience. Profile Card, People Search and Copilot propagation can take several hours and, in observed deployments, may exceed 12 hours. A delayed Profile Card update does not by itself mean that synchronization failed.
 
-Before waiting for the presentation layer, run `99 - Test-MSLearnProfileSchemaPopulation.ps1`. It reads the configured CSV and compares raw connector population with the Profile API for every enabled user, one selected user, or an aggregate summary. Raw external items are connection-specific, while the Profile API represents the composed user profile and can contain data from multiple sources. The validator therefore checks that each expected connector item is present and allows additional profile data from other sources. Administrators can also validate individual profile facets directly with Microsoft Graph PowerShell. The Profile API is currently available under the Microsoft Graph `beta` endpoint.
+During the Schema 2.4 experiment, run `Beta/99b - Test-MSLearnProfileSchemaPopulation.ps1` before waiting for the presentation layer. The validator is intentionally Beta-only until its behavior is confirmed and promoted together with the schema. It reads the Beta CSV and compares connection-specific raw items with the composed Profile API for every enabled user, one selected user, or an aggregate summary. The Profile API is currently available under the Microsoft Graph `beta` endpoint.
 
 For the signed-in user:
 
@@ -229,9 +226,12 @@ $Certifications.value |
     Format-Table -AutoSize
 ```
 
-For another user, replace `me` with `users/{id | userPrincipalName}`:
+For another user or a tenant-wide batch, reconnect with delegated `User.Read.All` and tenant admin consent:
 
 ```powershell
+Disconnect-MgGraph -ErrorAction SilentlyContinue
+Connect-MgGraph -Scopes "User.Read.All" -NoWelcome
+
 $UserPrincipalName = "user@contoso.com"
 $EncodedUser = [Uri]::EscapeDataString($UserPrincipalName)
 
@@ -250,7 +250,7 @@ $Certifications.value |
     Format-Table -AutoSize
 ```
 
-The Microsoft Graph documentation lists delegated `User.Read` as the least-privileged permission for listing certifications. `User.ReadWrite` also satisfies the endpoint but is unnecessary for read-only validation. Depending on tenant consent policies and the wider operations being performed, an administrator may instead grant `User.Read.All`; use the least privilege that works for the intended validation.
+Use delegated `User.Read` when reading the signed-in user's own profile. The Beta batch validator requests delegated `User.Read.All` with tenant admin consent because it reads profile facets for multiple users; a `User.Read` token returned `403 ErrorAccessDenied` in cross-user validation.
 
 A successful Graph response confirms that the Profile API can return the facet. It does **not** guarantee that every Microsoft 365 presentation surface has completed propagation.
 
