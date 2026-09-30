@@ -97,7 +97,17 @@ if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
     $ConfigPath = Join-Path $ScriptDirectory "Config\MSLearnPeopleConnector.beta.json"
 }
 else {
-    $ConfigPath = [System.IO.Path]::GetFullPath($ConfigPath)
+    if ([System.IO.Path]::IsPathRooted($ConfigPath)) {
+        $ConfigPath = [System.IO.Path]::GetFullPath($ConfigPath)
+    }
+    else {
+        # Resolve explicit relative paths from the script root rather than the
+        # process/.NET working directory (which can be C:\Windows\System32).
+        $ConfigPath =
+            [System.IO.Path]::GetFullPath(
+                (Join-Path $ScriptDirectory $ConfigPath)
+            )
+    }
 }
 
 $script:TranscriptStarted = $false
@@ -171,7 +181,8 @@ function Get-RequiredPropertyValue {
 
 function Get-OptionalPropertyValue {
     param(
-        [Parameter(Mandatory)]
+        [Parameter()]
+        [AllowNull()]
         $Object,
 
         [Parameter(Mandatory)]
@@ -1289,10 +1300,19 @@ function Get-MSLearnProfile {
             -Object $Transcript `
             -Name "appliedSkillsData"
 
+    # Applied Skills are optional. Profiles without appliedSkillsData must
+    # continue through the normal Learn certification and Credly pipeline.
     $AppliedSkillsRaw =
-        Get-OptionalPropertyValue `
-            -Object $AppliedSkillsData `
-            -Name "appliedSkillsCredentials"
+        @()
+
+    if ($null -ne $AppliedSkillsData) {
+        $AppliedSkillsRaw =
+            @(
+                Get-OptionalPropertyValue `
+                    -Object $AppliedSkillsData `
+                    -Name "appliedSkillsCredentials"
+            )
+    }
 
     $AppliedSkills =
         @(
