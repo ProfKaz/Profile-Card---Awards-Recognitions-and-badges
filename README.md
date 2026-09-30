@@ -62,6 +62,7 @@ The implementation:
 8. Deduplicates overlapping credentials, preserves unmanaged profile entries, and optionally removes stale credentials managed by this solution.
 9. Publishes source/title/update metadata together with the profile credentials and validates the external item after writing it.
 10. Produces execution logs and structured synchronization reports.
+11. Validates raw connector population against the materialized Profile API facets for all users or a selected user.
 
 ## Architecture
 
@@ -91,6 +92,13 @@ flowchart LR
 │   ├── 02 - New-MSLearnPeopleConnector.ps1
 │   ├── 03 - Sync-MSLearnCredlyPeopleProfiles.ps1
 │   └── 99 - Test-MSLearnProfileSchemaPopulation.ps1
+├── Beta/
+│   ├── README.md
+│   ├── 00b - Initialize-MSLearnPeopleConnector.ps1
+│   ├── 01b - Create-MSLearnPeopleConnectorApp.ps1
+│   ├── 02b - New-MSLearnPeopleConnector.ps1
+│   ├── 03b - Sync-MSLearnCredlyPeopleProfiles.ps1
+│   └── 99b - Test-MSLearnProfileSchemaPopulation.ps1
 ├── Support/
 │   ├── README.md
 │   └── MSLearnPeopleConnector.sample.json
