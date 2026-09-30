@@ -1451,7 +1451,7 @@ application is intentional.
         $secretEnd = $secretStart.AddMonths($SecretValidityMonths)
 
         $passwordCredential = @{
-            DisplayName   = 'MSLearn-People-Connector-Secret'
+            DisplayName   = 'M365-Profile-Card-Awards-Secret'
             StartDateTime = $secretStart
             EndDateTime   = $secretEnd
         }
