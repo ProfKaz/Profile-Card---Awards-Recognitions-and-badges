@@ -76,7 +76,7 @@ Keep access to the beta connection limited to the intended test population and t
 > [!WARNING]
 > A successful Step 03b write is not displayed immediately in every Microsoft 365 experience. Profile Card, Microsoft 365 Search and Copilot propagation can take several hours and, in observed deployments, may exceed 12 hours. Do not rerun or redesign the connector solely because the Profile Card has not updated yet.
 
-Run `99b - Test-MSLearnProfileSchemaPopulation.ps1` for the repeatable validation workflow. It reads `Data/CredentialUsers.beta.csv` and can show every enabled user, one selected user, or an aggregate count summary. The raw external item is connection-specific, but `/profile/certifications` and `/profile/awards` return the user's composed Microsoft 365 profile. When production and Beta connectors coexist, `99b` therefore verifies that every Beta item is present without requiring the shared profile count to equal the Beta connector count.
+`99b - Test-MSLearnProfileSchemaPopulation.ps1` is the only population validator maintained during the Schema 2.4 experiment. Run it for the repeatable validation workflow. It reads `Data/CredentialUsers.beta.csv` and can show every enabled user, one selected user, or an aggregate count summary. The raw external item is connection-specific, but `/profile/certifications` and `/profile/awards` return the user's composed Microsoft 365 profile. When production and Beta connectors coexist, `99b` therefore verifies that every Beta item is present without requiring the shared profile count to equal the Beta connector count.
 
 Schema 2.4 stores the experiment in three different properties, so each layer must be validated against the correct endpoint:
 
@@ -92,7 +92,7 @@ Use the user's Entra object ID or user principal name in place of `me`. The foll
 
 ```powershell
 Connect-MgGraph `
-    -Scopes "User.Read" `
+    -Scopes "User.Read.All" `
     -NoWelcome
 
 $UserPrincipalName = "user@contoso.com"
@@ -127,7 +127,7 @@ $Awards.value |
     Format-Table -AutoSize
 ```
 
-Microsoft Graph documents delegated `User.Read` as the least-privileged permission for both list operations. `User.ReadWrite` is also accepted but is unnecessary for a read-only check. If tenant consent policy or a broader administrative validation requires it, `User.Read.All` can be used after the required administrator consent.
+Use delegated `User.Read` for the signed-in user's own profile. Step 99b performs cross-user batch validation, so it requests delegated `User.Read.All` and verifies that the scope is present in the access token. This permission requires tenant administrator consent. A token containing only `User.Read` returned `403 ErrorAccessDenied` for `/users/{id-or-UPN}/profile/*` in the tested tenant.
 
 ### Validate the raw Schema 2.4 external item
 
