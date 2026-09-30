@@ -1552,7 +1552,7 @@ try {
     Write-Host "Copilot visibility:" -ForegroundColor Cyan
     Write-Host "  Recommended value     : On"
     Write-Host "  Automation status     : Not configured through the current Microsoft Graph contract"
-    Write-Host "  Post-deployment action: Microsoft 365 admin center > Copilot > Connectors > Your connections > Copilot Visibility > On" -ForegroundColor Yellow
+    Write-Host "  Post-deployment action: Microsoft 365 admin center > Copilot > Connectors > Your connections > $ConnectionName > Copilot Visibility > On" -ForegroundColor Yellow
     Write-Host ""
     Write-Success "Step 2 completed. No user/test data was inserted."
 

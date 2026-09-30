@@ -1,5 +1,9 @@
 # Beta – Schema 2.4 Applied Skills experiment
 
+<p align="center">
+  <img src="../Assets/Branding/beta/m365-profile-card-awards-beta-512.png" alt="M365 Profile Card Awards Beta shield" width="200">
+</p>
+
 This folder is intentionally isolated from the production scripts under `/Source`.
 
 ## Objective

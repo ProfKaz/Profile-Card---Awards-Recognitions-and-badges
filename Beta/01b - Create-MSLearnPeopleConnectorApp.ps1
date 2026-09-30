@@ -69,7 +69,7 @@
 
 .EXAMPLE
     & '.\01b - Create-MSLearnPeopleConnectorApp.ps1' `
-        -DisplayName 'Contoso Credential Profile Connector Beta' `
+        -DisplayName 'M365 Profile Card Awards Connector Beta' `
         -SecretValidityMonths 6
 
 .NOTES

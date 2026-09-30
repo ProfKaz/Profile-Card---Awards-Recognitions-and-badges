@@ -1,5 +1,9 @@
 # M365 Profile Card Awards
 
+<p align="center">
+  <img src="Assets/Branding/main/m365-profile-card-awards-github-512.png" alt="M365 Profile Card Awards shield" width="220">
+</p>
+
 > Surface verified professional credentials and recognitions from Microsoft Learn and Credly in Microsoft 365 profile cards, Microsoft Search and Microsoft 365 Copilot.
 
 ![Skills visibility carousel cover](Assets/Carousel/01.svg)
@@ -93,6 +97,11 @@ flowchart LR
 │   ├── Copilot-Prompt-Library.md
 │   └── Copilot-Usage-Tips.md
 └── Assets/
+    ├── Branding/
+    │   ├── README.md
+    │   ├── main/
+    │   ├── beta/
+    │   └── flat/
     └── Carousel/
         ├── README.md
         └── 01.svg
@@ -271,5 +280,7 @@ Once the profile data is available and indexed in Microsoft 365, organizations c
 Actual Microsoft 365 Copilot behavior depends on tenant configuration, licensing, permissions, indexing and the quality of the published profile data.
 
 ## Visual assets
+
+The [Assets/Branding](Assets/Branding) folder contains the production, Beta and small-size icon families for **M365 Profile Card Awards**, including connector-ready PNG files and a multi-resolution ICO file.
 
 The [Assets/Carousel](Assets/Carousel) folder contains the visual assets currently published with the repository. The cover asset introduces the business problem and the solution at a high level; additional carousel slides can be added to that folder as they are published.
