@@ -58,14 +58,21 @@ Defines the People Data Connector identity and profile source behavior.
 
 Important defaults:
 
-- `ConnectionId`: `mslearncred`
+- `Application.DisplayName`: `M365 Profile Card Awards Connector`
+- `ConnectionName`: `M365 Profile Card Awards`
+- `ConnectionId`: `mslearncred` (preserved for compatibility)
 - `ContentCategory`: `people`
 - `ProfileSourceKind`: `MicrosoftLearn`
+- `CopilotVisibilityRecommended`: `On`
 
 The following values are Microsoft profile-service constants rather than private tenant identifiers:
 
 - `ProfilePropertySettingId = 00000000-0000-0000-0000-000000000001`
 - `EntraIdSourceId = 4ce763dd-9214-4eff-af7c-da491cc3782d`
+
+### Copilot visibility
+
+`CopilotVisibilityRecommended` is operational guidance, not an assumed Microsoft Graph API property. After provisioning, validate that **Copilot Visibility** is set to **On** in the Microsoft 365 admin center so that the connection can participate in Copilot Chat and search experiences.
 
 ### Schema
 
