@@ -10,6 +10,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $script:GraphConnected = $false
+$script:GraphPowerShellClientId = '14d82eec-204b-4c2f-b7e8-296a70dab67e'
 
 function Write-Section {
     param([Parameter(Mandatory)][string]$Title)
@@ -228,7 +229,7 @@ function Connect-ConnectorApplication {
         [Parameter(Mandatory)][string]$ClientSecret
     )
 
-    Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
+    Clear-GraphConnection
     $SecureSecret = ConvertTo-SecureString $ClientSecret -AsPlainText -Force
     $Credential = [PSCredential]::new($ClientId, $SecureSecret)
 
@@ -246,41 +247,137 @@ function Connect-ConnectorApplication {
     $script:GraphConnected = $true
 }
 
-function Connect-ProfileValidationUser {
-    param([Parameter(Mandatory)][string]$TenantId)
-
-    Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
-    $script:GraphConnected = $false
-
-    Write-Host ""
-    Write-Host "A delegated sign-in is required to read Profile API facets." -ForegroundColor Yellow
-    Connect-MgGraph `
-        -TenantId $TenantId `
-        -Scopes 'User.Read' `
-        -UseDeviceCode `
-        -NoWelcome `
-        -ErrorAction Stop
-
-    $Context = Get-MgContext
-    if ($Context.AuthType -ne 'Delegated') {
-        throw "Expected delegated authentication for Profile API validation."
+function Clear-GraphConnection {
+    try {
+        Disconnect-MgGraph `
+            -ErrorAction SilentlyContinue `
+            -WarningAction SilentlyContinue |
+            Out-Null
+    }
+    catch {
+        # Cleanup must not interrupt a read-only validation.
     }
 
-    $script:GraphConnected = $true
+    $script:GraphConnected = $false
 }
 
-function Get-GraphCollection {
-    param([Parameter(Mandatory)][string]$Uri)
+function Get-ProfileValidationAccessToken {
+    param([Parameter(Mandatory)][string]$TenantId)
+
+    $AuthorityTenant = $TenantId.Trim()
+    $DeviceCodeUri = "https://login.microsoftonline.com/$AuthorityTenant/oauth2/v2.0/devicecode"
+    $TokenUri = "https://login.microsoftonline.com/$AuthorityTenant/oauth2/v2.0/token"
+
+    $Device = Invoke-RestMethod `
+        -Method POST `
+        -Uri $DeviceCodeUri `
+        -ContentType 'application/x-www-form-urlencoded' `
+        -Body @{
+            client_id = $script:GraphPowerShellClientId
+            scope     = 'https://graph.microsoft.com/User.Read openid profile'
+        } `
+        -ErrorAction Stop
+
+    if (-not $Device.device_code -or -not $Device.user_code) {
+        throw 'Microsoft identity platform did not return a valid Device Code response.'
+    }
+
+    $VerificationUriValue = Get-OptionalPropertyValue $Device 'verification_uri'
+    $VerificationUrlValue = Get-OptionalPropertyValue $Device 'verification_url'
+    $VerificationUri = if (-not [string]::IsNullOrWhiteSpace([string]$VerificationUriValue)) {
+        [string]$VerificationUriValue
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace([string]$VerificationUrlValue)) {
+        [string]$VerificationUrlValue
+    }
+    else {
+        'https://microsoft.com/devicelogin'
+    }
+
+    Write-Host ''
+    Write-Host 'A delegated sign-in is required to read Profile API facets.' -ForegroundColor Yellow
+    Write-Host "Open: $VerificationUri" -ForegroundColor Cyan
+    Write-Host "Code: $($Device.user_code)" -ForegroundColor Green
+    Write-Host 'Waiting for authentication...' -ForegroundColor DarkGray
+
+    $IntervalValue = Get-OptionalPropertyValue $Device 'interval'
+    $ExpiresInValue = Get-OptionalPropertyValue $Device 'expires_in'
+    $Interval = if ($null -ne $IntervalValue) { [int]$IntervalValue } else { 5 }
+    $ExpiresIn = if ($null -ne $ExpiresInValue) { [int]$ExpiresInValue } else { 900 }
+    $Deadline = (Get-Date).AddSeconds($ExpiresIn)
+
+    $TokenBody = @{
+        grant_type  = 'urn:ietf:params:oauth:grant-type:device_code'
+        client_id   = $script:GraphPowerShellClientId
+        device_code = $Device.device_code
+    }
+
+    while ((Get-Date) -lt $Deadline) {
+        Start-Sleep -Seconds $Interval
+        $TokenStatusCode = $null
+
+        $Token = Invoke-RestMethod `
+            -Method POST `
+            -Uri $TokenUri `
+            -ContentType 'application/x-www-form-urlencoded' `
+            -Body $TokenBody `
+            -SkipHttpErrorCheck `
+            -StatusCodeVariable TokenStatusCode
+
+        $AccessTokenValue = [string](Get-OptionalPropertyValue $Token 'access_token')
+
+        if (
+            $TokenStatusCode -ge 200 -and
+            $TokenStatusCode -lt 300 -and
+            -not [string]::IsNullOrWhiteSpace($AccessTokenValue)
+        ) {
+            Write-Host '[OK] Delegated authentication completed.' -ForegroundColor Green
+            return $AccessTokenValue
+        }
+
+        $OAuthError = [string](Get-OptionalPropertyValue $Token 'error')
+        $OAuthDescription = [string](Get-OptionalPropertyValue $Token 'error_description')
+
+        if ($OAuthError -eq 'authorization_pending') { continue }
+        if ($OAuthError -eq 'slow_down') {
+            $Interval += 5
+            continue
+        }
+        if ($TokenStatusCode -eq 429 -or $TokenStatusCode -ge 500) { continue }
+
+        throw "Device Code authentication failed: $OAuthError - $OAuthDescription"
+    }
+
+    throw 'The Device Code expired before authentication was completed.'
+}
+
+function Get-ProfileGraphCollection {
+    param(
+        [Parameter(Mandatory)][string]$Uri,
+        [Parameter(Mandatory)][string]$AccessToken
+    )
 
     $Items = @()
     $NextUri = $Uri
 
     while (-not [string]::IsNullOrWhiteSpace($NextUri)) {
-        $Response = Invoke-MgGraphRequest `
+        $StatusCode = $null
+        $Response = Invoke-RestMethod `
             -Method GET `
             -Uri $NextUri `
-            -OutputType PSObject `
-            -ErrorAction Stop
+            -Headers @{
+                Authorization = "Bearer $AccessToken"
+                Accept        = 'application/json'
+            } `
+            -SkipHttpErrorCheck `
+            -StatusCodeVariable StatusCode
+
+        if ($StatusCode -lt 200 -or $StatusCode -ge 300) {
+            $GraphError = Get-OptionalPropertyValue $Response 'error'
+            $ErrorCode = [string](Get-OptionalPropertyValue $GraphError 'code')
+            $ErrorMessage = [string](Get-OptionalPropertyValue $GraphError 'message')
+            throw "Profile API HTTP $StatusCode - $ErrorCode - $ErrorMessage"
+        }
 
         $Items += @($Response.value)
         $NextProperty = $Response.PSObject.Properties['@odata.nextLink']
@@ -329,7 +426,8 @@ function Get-ExternalValidationResult {
 function Get-ProfileValidationResult {
     param(
         [Parameter(Mandatory)]$User,
-        [Parameter(Mandatory)][string]$GraphBeta
+        [Parameter(Mandatory)][string]$GraphBeta,
+        [Parameter(Mandatory)][string]$AccessToken
     )
 
     $EncodedUser = [Uri]::EscapeDataString($User.UserPrincipalName)
@@ -339,10 +437,10 @@ function Get-ProfileValidationResult {
     $Awards = @()
     $Errors = @()
 
-    try { $Certifications = @(Get-GraphCollection "$BaseUri/certifications") }
+    try { $Certifications = @(Get-ProfileGraphCollection "$BaseUri/certifications" $AccessToken) }
     catch { $Errors += "certifications: $($_.Exception.Message)" }
 
-    try { $Awards = @(Get-GraphCollection "$BaseUri/awards") }
+    try { $Awards = @(Get-ProfileGraphCollection "$BaseUri/awards" $AccessToken) }
     catch { $Errors += "awards: $($_.Exception.Message)" }
 
     return [PSCustomObject]@{
@@ -352,25 +450,65 @@ function Get-ProfileValidationResult {
     }
 }
 
+function Get-ProfileFacetKey {
+    param(
+        [Parameter(Mandatory)]$Item,
+        [Parameter(Mandatory)][ValidateSet('Certification', 'Award')][string]$Facet
+    )
+
+    if ($Facet -eq 'Certification') {
+        $Id = [string](Get-OptionalPropertyValue $Item 'certificationId')
+        if (-not [string]::IsNullOrWhiteSpace($Id)) {
+            return 'id:' + $Id.Trim().ToLowerInvariant()
+        }
+    }
+
+    $Name = [string](Get-OptionalPropertyValue $Item 'displayName')
+    $NormalizedName = $Name.Normalize([Text.NormalizationForm]::FormD) -replace '\p{Mn}', ''
+    $NormalizedName = $NormalizedName.ToLowerInvariant() -replace '[^a-z0-9]', ''
+    return 'name:' + $NormalizedName
+}
+
 function Get-MaterializationState {
     param([Parameter(Mandatory)]$Result)
 
     if ($Result.ExternalError -or $Result.ProfileError) { return 'Error' }
 
-    $ExpectedCertifications = $Result.ExternalCertifications
-    $ExpectedAwards = $Result.ExternalAppliedSkillsAwards
-    $ActualCertifications = $Result.ProfileCertifications
-    $ActualAwards = $Result.ProfileAwards
+    $ExpectedCertifications = @($Result.External.Certifications)
+    $ExpectedAwards = @($Result.External.AppliedSkillsAwards)
+    $ActualCertifications = @($Result.Profile.Certifications)
+    $ActualAwards = @($Result.Profile.Awards)
 
-    if ($ActualCertifications -eq $ExpectedCertifications -and $ActualAwards -eq $ExpectedAwards) {
-        return 'Match'
+    if ($ExpectedCertifications.Count -eq 0 -and $ExpectedAwards.Count -eq 0) {
+        if ($ActualCertifications.Count -gt 0 -or $ActualAwards.Count -gt 0) {
+            return 'OtherSourceData'
+        }
+        return 'NoData'
     }
 
-    if ($ActualCertifications -le $ExpectedCertifications -and $ActualAwards -le $ExpectedAwards) {
-        return 'Pending'
+    $ActualCertificationKeys = @{}
+    foreach ($Item in $ActualCertifications) {
+        $ActualCertificationKeys[(Get-ProfileFacetKey $Item 'Certification')] = $true
     }
 
-    return 'Different'
+    $ActualAwardKeys = @{}
+    foreach ($Item in $ActualAwards) {
+        $ActualAwardKeys[(Get-ProfileFacetKey $Item 'Award')] = $true
+    }
+
+    foreach ($Item in $ExpectedCertifications) {
+        if (-not $ActualCertificationKeys.ContainsKey((Get-ProfileFacetKey $Item 'Certification'))) {
+            return 'Pending'
+        }
+    }
+
+    foreach ($Item in $ExpectedAwards) {
+        if (-not $ActualAwardKeys.ContainsKey((Get-ProfileFacetKey $Item 'Award'))) {
+            return 'Pending'
+        }
+    }
+
+    return 'Materialized'
 }
 
 function Show-UserDetail {
@@ -556,12 +694,16 @@ try {
     }
 
     Write-Section 'LAYER 2 - Microsoft 365 Profile API materialization'
-    Connect-ProfileValidationUser -TenantId $TenantId
+    Clear-GraphConnection
+    $ProfileAccessToken = Get-ProfileValidationAccessToken -TenantId $TenantId
     $ProfileResults = @{}
 
     foreach ($User in $SelectedUsers) {
         Write-Host "Reading profile facets: $($User.UserPrincipalName)"
-        $ProfileResults[$User.UserPrincipalName] = Get-ProfileValidationResult -User $User -GraphBeta $GraphBeta
+        $ProfileResults[$User.UserPrincipalName] = Get-ProfileValidationResult `
+            -User $User `
+            -GraphBeta $GraphBeta `
+            -AccessToken $ProfileAccessToken
     }
 
     $Results = @(
@@ -612,16 +754,26 @@ try {
             ExternalAppliedSkillsAwards = ($Results | Measure-Object ExternalAppliedSkillsAwards -Sum).Sum
             ProfileCertifications       = ($Results | Measure-Object ProfileCertifications -Sum).Sum
             ProfileAwards               = ($Results | Measure-Object ProfileAwards -Sum).Sum
-            Match                        = @($Results | Where-Object Materialization -EQ 'Match').Count
+            Materialized                 = @($Results | Where-Object Materialization -EQ 'Materialized').Count
             Pending                      = @($Results | Where-Object Materialization -EQ 'Pending').Count
-            Different                    = @($Results | Where-Object Materialization -EQ 'Different').Count
+            OtherSourceData              = @($Results | Where-Object Materialization -EQ 'OtherSourceData').Count
+            NoData                       = @($Results | Where-Object Materialization -EQ 'NoData').Count
             Errors                       = @($Results | Where-Object Materialization -EQ 'Error').Count
         } | Format-List
+
+        $FailedResults = @($Results | Where-Object Materialization -EQ 'Error')
+        if ($FailedResults.Count -gt 0) {
+            Write-Section 'VALIDATION ERRORS'
+            $FailedResults |
+                Select-Object UserPrincipalName, ExternalError, ProfileError |
+                Format-List
+        }
     }
 
     Write-Host ''
-    Write-Host "Match means the Profile API counts equal the connector item counts." -ForegroundColor DarkGray
-    Write-Host "Pending usually means ingestion succeeded but profile materialization is still incomplete." -ForegroundColor DarkGray
+    Write-Host "Materialized means every item from this connector was found in the shared Profile API facets." -ForegroundColor DarkGray
+    Write-Host "OtherSourceData means this connector has no items but the shared profile contains data from another source." -ForegroundColor DarkGray
+    Write-Host "Pending means one or more connector items were not found in the shared profile yet." -ForegroundColor DarkGray
 }
 catch {
     Write-Host ''
@@ -631,6 +783,6 @@ catch {
 }
 finally {
     if ($script:GraphConnected) {
-        Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
+        Clear-GraphConnection
     }
 }
