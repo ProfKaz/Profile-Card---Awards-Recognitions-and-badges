@@ -349,6 +349,7 @@ function New-EvidenceRow {
         DisplayName = $Name; IssuedOrAwardedDate = $Issued; EndDate = $End
         IssuingAuthority = Get-FieldText $Item 'issuingAuthority'
         Source = (Get-OptionalPropertyValue $Item 'source' | ConvertTo-Json -Depth 30 -Compress)
+        Sources = (Get-OptionalPropertyValue $Item 'sources' | ConvertTo-Json -Depth 30 -Compress)
         CreatedBy = (Get-OptionalPropertyValue $Item 'createdBy' | ConvertTo-Json -Depth 30 -Compress)
         LastModifiedBy = (Get-OptionalPropertyValue $Item 'lastModifiedBy' | ConvertTo-Json -Depth 30 -Compress)
     }
