@@ -11,16 +11,16 @@
     Existing operational files are preserved by default.
 
 .EXAMPLE
-    .\0-Initialize-MSLearnPeopleConnector.ps1
+    & '.\00 - Initialize-MSLearnPeopleConnector.ps1'
 
 .EXAMPLE
-    .\0-Initialize-MSLearnPeopleConnector.ps1 -SkipModuleInstall
+    & '.\00 - Initialize-MSLearnPeopleConnector.ps1' -SkipModuleInstall
 
 .EXAMPLE
-    .\0-Initialize-MSLearnPeopleConnector.ps1 -RefreshDocumentation
+    & '.\00 - Initialize-MSLearnPeopleConnector.ps1' -RefreshDocumentation
 
 .EXAMPLE
-    .\0-Initialize-MSLearnPeopleConnector.ps1 -ResetConfig
+    & '.\00 - Initialize-MSLearnPeopleConnector.ps1' -ResetConfig
 
 .NOTES
     Recommended location: C:\MyDev\MSLearn
@@ -49,7 +49,7 @@ $ErrorActionPreference = 'Stop'
 
 # Centralized configuration contract managed by Step 0.
 # Step 0 never downgrades a configuration that is newer than this version.
-$TargetSchemaVersionText = '2.3'
+$TargetSchemaVersionText = '2.4'
 $TargetSchemaVersion = [version]$TargetSchemaVersionText
 
 if ([string]::IsNullOrWhiteSpace($RootPath)) {
@@ -327,6 +327,21 @@ function New-BaseConfiguration {
                 Labels = @('personCertifications')
             }
 
+            # Schema 2.4:
+            # Applied Skills remain distinct from Certifications.
+            AppliedSkillsProperty = [ordered]@{
+                Name        = 'microsoftAppliedSkills'
+                Type        = 'stringCollection'
+                Description = 'Microsoft Applied Skills credentials earned by the person. Scenario-based Microsoft credentials distinct from Microsoft Certifications.'
+            }
+
+            # Visual projection for Profile Card validation.
+            AppliedSkillsAwardsProperty = [ordered]@{
+                Name   = 'appliedSkillsAwards'
+                Type   = 'stringCollection'
+                Labels = @('personAwards')
+            }
+
             TitleProperty = [ordered]@{
                 Name          = 'title'
                 Type          = 'string'
@@ -363,8 +378,12 @@ function New-BaseConfiguration {
 
         CredentialSources = [ordered]@{
             MicrosoftLearn = [ordered]@{
-                Enabled = $true
-                Locale  = 'en-us'
+                Enabled                         = $true
+                Locale                          = 'en-us'
+                PublishActiveCertificationsOnly = $true
+                PublishAppliedSkills            = $true
+                PublishAppliedSkillsAsAwards    = $true
+                AppliedSkillManagedDescription  = 'Microsoft Applied Skills credential synchronized from Microsoft Learn'
             }
             Credly = [ordered]@{
                 Enabled    = $true
@@ -453,7 +472,7 @@ by Step 0 are preserved.
 
 ## MSLearnPeopleConnector.Template.json
 
-Reference copy of the current base SchemaVersion 2.3 configuration.
+Reference copy of the current base SchemaVersion 2.4 configuration.
 '@
 
 $DataReadme = @'
@@ -743,6 +762,22 @@ try {
                 }
             }
 
+            # Migrate project-owned legacy branding while preserving custom names and identities.
+            $brandingUpdates = @(
+                @{ Section = 'Application'; Name = 'DisplayName'; Legacy = @('MSLearn People Connector', 'Microsoft Learn Credentials'); Value = $baseContract.Application.DisplayName },
+                @{ Section = 'Connector'; Name = 'ConnectionName'; Legacy = @('Microsoft Learn Credentials'); Value = $baseContract.Connector.ConnectionName },
+                @{ Section = 'Connector'; Name = 'ConnectionDescription'; Legacy = @('Microsoft Learn and Credly credentials for Microsoft 365 people profiles'); Value = $baseContract.Connector.ConnectionDescription }
+            )
+            foreach ($brandingUpdate in $brandingUpdates) {
+                $section = $existingConfig.PSObject.Properties[$brandingUpdate.Section].Value
+                $property = $section.PSObject.Properties[$brandingUpdate.Name]
+                if ($null -ne $property -and [string]$property.Value -in $brandingUpdate.Legacy) {
+                    $property.Value = $brandingUpdate.Value
+                    $configurationChanged = $true
+                    Write-InfoMessage "Updated project branding: $($brandingUpdate.Section).$($brandingUpdate.Name)"
+                }
+            }
+
             if ($configurationChanged) {
                 $backup = "$ConfigPath.$(Get-Date -Format 'yyyyMMdd-HHmmss').bak"
                 Copy-Item -LiteralPath $ConfigPath -Destination $backup -Force
@@ -900,7 +935,7 @@ user@contoso.com,00000000-0000-0000-0000-000000000000,learn-user,public-transcri
     Write-Host "Reports      : $ReportsDirectory"
     Write-Host ''
     Write-Host 'Step 0 configuration validation/migration completed.' -ForegroundColor Cyan
-    Write-Host 'Validate SchemaVersion 2.3 before continuing with the next project step.' -ForegroundColor Cyan
+    Write-Host 'Validate SchemaVersion 2.4 before continuing with the next project step.' -ForegroundColor Cyan
 }
 catch {
     Write-Host ''

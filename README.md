@@ -31,13 +31,17 @@ After Step 02, validate the setting in:
 
 `Microsoft 365 admin center > Copilot > Connectors > Your connections > M365 Profile Card Awards > Copilot Visibility > On`
 
+## Current release — Schema 2.4
+
+The tested Beta implementation was promoted to `Source` on October 1, 2026, including Applied Skills and the population validator. `Beta` is reserved for future preview releases and currently contains no scripts. See the [production upgrade and cutover instructions](Source/README.md#upgrade-from-schema-23-or-a-beta-working-directory) before updating an existing deployment. This release does not automatically retire existing Beta tenant data.
+
 ## Why this project exists
 
 Microsoft 365 can display awards and certification badges directly on a user's profile card when an organization configures an appropriate profile data source. Once published, this information can also improve people discovery scenarios across Microsoft 365, including Microsoft 365 Copilot.
 
 This project provides a PowerShell-based reference implementation that creates a **Microsoft 365 People Data Connector** and synchronizes professional credentials from:
 
-- **Microsoft Learn** – active Microsoft certifications exposed through a shared/public Learn profile and transcript.
+- **Microsoft Learn** – active Microsoft certifications and Microsoft Applied Skills exposed through a shared/public Learn profile and transcript.
 - **Credly** – public and accepted badges, awards and recognitions within a configurable rolling window. The default used by this project is **12 months**.
 
 The objective is not simply to display badges. It is to build a more current, searchable inventory of demonstrated capabilities that can support staffing, service delivery, proposal preparation, internal expertise discovery and Copilot-assisted people search.
@@ -50,15 +54,17 @@ The implementation:
 2. Creates a Microsoft Entra application and service principal with the Microsoft Graph application permissions required by the connector.
 3. Creates and configures a Microsoft 365 People Data Connector with `contentCategory = people`.
 4. Registers the connector as a Microsoft 365 profile source and configures profile source precedence.
-5. Maps the connector schema to Microsoft 365 using the SchemaVersion 2.3 semantic-label contract:
+5. Maps the connector schema to Microsoft 365 using the SchemaVersion 2.4 semantic-label contract:
    - `personAccount`
    - `personCertifications`
+   - `personAwards` for Applied Skills presentation
+   - `microsoftAppliedSkills` as custom semantic context
    - `title`
    - `url`
    - `lastModifiedBy`
    - `lastModifiedDateTime`
 6. Reads enabled users from a controlled input source.
-7. Retrieves active Microsoft Learn certifications and recent Credly badges.
+7. Retrieves active Microsoft Learn certifications, Applied Skills and recent Credly badges.
 8. Deduplicates overlapping credentials, preserves unmanaged profile entries, and optionally removes stale credentials managed by this solution.
 9. Publishes source/title/update metadata together with the profile credentials and validates the external item after writing it.
 10. Produces execution logs and structured synchronization reports.
@@ -89,14 +95,10 @@ flowchart LR
 │   ├── 00 - Initialize-MSLearnPeopleConnector.ps1
 │   ├── 01 - Create-MSLearnPeopleConnectorApp.ps1
 │   ├── 02 - New-MSLearnPeopleConnector.ps1
-│   └── 03 - Sync-MSLearnCredlyPeopleProfiles.ps1
+│   ├── 03 - Sync-MSLearnCredlyPeopleProfiles.ps1
+│   └── 99 - Test-MSLearnProfileSchemaPopulation.ps1
 ├── Beta/
-│   ├── README.md
-│   ├── 00b - Initialize-MSLearnPeopleConnector.ps1
-│   ├── 01b - Create-MSLearnPeopleConnectorApp.ps1
-│   ├── 02b - New-MSLearnPeopleConnector.ps1
-│   ├── 03b - Sync-MSLearnCredlyPeopleProfiles.ps1
-│   └── 99b - Test-MSLearnProfileSchemaPopulation.ps1
+│   └── README.md
 ├── Support/
 │   ├── README.md
 │   └── MSLearnPeopleConnector.sample.json
@@ -159,7 +161,7 @@ The Step 0 script validates the Microsoft Graph PowerShell modules required by t
 
 The `Source` folder is a distribution folder. Keep it clean.
 
-Copy the four scripts into a dedicated operational folder before running them, for example:
+Copy the five scripts into a dedicated operational folder before running them, for example:
 
 ```text
 C:\MyDev\MSLearn
@@ -176,9 +178,10 @@ Run the scripts in this order from the operational working folder:
 & '.\01 - Create-MSLearnPeopleConnectorApp.ps1'
 & '.\02 - New-MSLearnPeopleConnector.ps1'
 & '.\03 - Sync-MSLearnCredlyPeopleProfiles.ps1'
+& '.\99 - Test-MSLearnProfileSchemaPopulation.ps1'
 ```
 
-Step 00 is safe to rerun against an existing operational folder. It validates the SchemaVersion 2.3 contract, backs up the JSON before changing it, upgrades older schema contracts, and restores missing configuration properties without replacing existing operational values.
+Step 00 is safe to rerun against an existing operational folder. It validates the SchemaVersion 2.4 contract, backs up the JSON before changing it, upgrades older schema contracts, and restores missing configuration properties without replacing existing operational values.
 
 Before Step 3, populate the generated user mapping file:
 
@@ -209,7 +212,7 @@ People Data Connector information is organization-visible profile data. Only ing
 > [!WARNING]
 > Changes written successfully to the People Data Connector are not displayed immediately in every Microsoft 365 experience. Profile Card, People Search and Copilot propagation can take several hours and, in observed deployments, may exceed 12 hours. A delayed Profile Card update does not by itself mean that synchronization failed.
 
-During the Schema 2.4 experiment, run `Beta/99b - Test-MSLearnProfileSchemaPopulation.ps1` before waiting for the presentation layer. The validator is intentionally Beta-only until its behavior is confirmed and promoted together with the schema. It reads the Beta CSV and compares connection-specific raw items with the composed Profile API for every enabled user, one selected user, or an aggregate summary. The Profile API is currently available under the Microsoft Graph `beta` endpoint.
+Run `Source/99 - Test-MSLearnProfileSchemaPopulation.ps1` after synchronization to compare connector-specific raw items with the composed Profile API for every enabled user, one selected user, or an aggregate summary. This validator was promoted with Schema 2.4. The Profile API continues to use the Microsoft Graph `beta` endpoint.
 
 For the signed-in user:
 
@@ -257,14 +260,14 @@ $Certifications.value |
     Format-Table -AutoSize
 ```
 
-Use delegated `User.Read` when reading the signed-in user's own profile. The Beta batch validator requests delegated `User.Read.All` with tenant admin consent because it reads profile facets for multiple users; a `User.Read` token returned `403 ErrorAccessDenied` in cross-user validation.
+Use delegated `User.Read` when reading the signed-in user's own profile. The production population validator requests delegated `User.Read.All` with tenant admin consent because it reads profile facets for multiple users; a `User.Read` token returned `403 ErrorAccessDenied` in cross-user validation.
 
 A successful Graph response confirms that the Profile API can return the facet. It does **not** guarantee that every Microsoft 365 presentation surface has completed propagation.
 
 ## Important implementation notes
 
-- The current configuration baseline is **SchemaVersion 2.3**.
-- The default schema includes the People-specific `personAccount` and `personCertifications` labels plus `title`, `url`, `lastModifiedBy` and `lastModifiedDateTime`.
+- The current configuration baseline is **SchemaVersion 2.4**.
+- The default schema includes the People-specific `personAccount`, `personCertifications` and `personAwards` labels, custom `microsoftAppliedSkills` context plus `title`, `url`, `lastModifiedBy` and `lastModifiedDateTime`.
 - Step 02 reconciles schema drift for connectors in either `draft` or `ready` state. Use `-ForceSchemaUpdate` only when an explicit schema reapply is required for troubleshooting.
 - Step 03 validates the live external schema before processing users and validates semantic metadata after each external-item write.
 - The default Credly rolling window is **12 months**. This is a project configuration choice, not a Microsoft 365 limitation.

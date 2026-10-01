@@ -1,6 +1,6 @@
 # Extending People Profiles: Custom Properties, Skills, and Limits
 
-M365 Profile Card Awards | Documentation reviewed: September 30, 2026.
+M365 Profile Card Awards | Documentation reviewed: September 30, 2026. Implementation promoted: October 1, 2026.
 
 ## 1. Choose the representation
 
@@ -16,17 +16,17 @@ A property name alone does not map data to a native entity. For example, naming 
 
 ### Current repository behavior
 
-Production Source uses Schema 2.3: Microsoft Learn certifications and recent Credly entries are published through certifications / personCertifications. Beta uses Schema 2.4 and adds Microsoft Applied Skills through two properties.
+Production Source now uses Schema 2.4: Microsoft Learn certifications and recent Credly entries are published through certifications / personCertifications, with Microsoft Applied Skills represented through two additional properties. The previously tested Beta implementation was promoted on October 1, 2026.
 
-| Beta property | Label | Role |
+| Production property | Label | Role |
 |---|---|---|
 | certifications | personCertifications | Existing certifications |
 | microsoftAppliedSkills | None | Custom semantic context for Applied Skills |
 | appliedSkillsAwards | personAwards | Award projection for profile presentation |
 
-The Beta custom property contains one YAML-like text block per credential: type, name, ID, issue date, issuer, source and transcript URL. The award projection is a project design choice, not a Microsoft Applied Skills-specific profile entity. Applied Skills are not added to personCertifications. This preserves the distinction between a scenario-based credential and a Microsoft Certification.
+The custom property contains one YAML-like text block per credential: type, name, ID, issue date, issuer, source and transcript URL. The award projection is a project design choice, not a Microsoft Applied Skills-specific profile entity. Applied Skills are not added to personCertifications. This preserves the distinction between a scenario-based credential and a Microsoft Certification.
 
-The other examples in this guide are extension patterns. They are not additional features already implemented by the scripts. See the [Beta guide](../Beta/README.md) for the tested implementation.
+The other examples in this guide are extension patterns. They are not additional features already implemented by the scripts. See the [Source guide](../Source/README.md) for the tested implementation.
 
 ## 2. Quantities and limits: count the right thing
 
@@ -191,9 +191,9 @@ Recommended pilot: ingest one distinct skill for one user, validate the raw stri
 | Search / Copilot | Positive, negative and type-specific questions | Correct person, credential type and evidence |
 | Profile card | Inspect each required client | Correct visible content after propagation |
 
-Use the connector application's already authorized permissions for raw-item checks where possible. Cross-user profile checks in the existing Beta validator use delegated User.Read.All with admin consent. The Profile API remains beta and is subject to change; its use in production applications is not supported by Microsoft. [6]
+Use the connector application's already authorized permissions for raw-item checks where possible. Cross-user profile checks in the production population validator use delegated User.Read.All with admin consent. The Profile API remains beta and is subject to change; its use in production applications is not supported by Microsoft. [6]
 
-Custom fields such as microsoftAppliedSkills are checked in the raw external item; they do not have a native /profile/microsoftAppliedSkills facet. The existing 99b validator covers the Schema 2.4 experiment; a new skills or custom-property extension requires corresponding validator changes.
+Custom fields such as microsoftAppliedSkills are checked in the raw external item; they do not have a native /profile/microsoftAppliedSkills facet. The existing 99 validator covers the production Schema 2.4 contract; a new skills or custom-property extension requires corresponding validator changes.
 
 ### Coexisting connections and duplicates
 
@@ -226,4 +226,4 @@ An extension is ready for review when its schema, source mapping, stable keys, c
 9. [Manage profile source precedence](https://learn.microsoft.com/en-us/graph/profilepriority-configure-profilepropertysetting)
 10. [Enriching and customizing profile cards](https://learn.microsoft.com/en-us/microsoft-365/admin/manage/customize-profile-cards)
 11. [Microsoft 365 Roadmap: verify item 529851](https://www.microsoft.com/en-us/microsoft-365/roadmap?searchterms=529851)
-12. [Project: Beta Schema 2.4 implementation](https://github.com/ProfKaz/Profile-Card---Awards-Recognitions-and-badges/tree/main/Beta)
+12. [Project: production Schema 2.4 implementation](https://github.com/ProfKaz/Profile-Card---Awards-Recognitions-and-badges/tree/main/Source)

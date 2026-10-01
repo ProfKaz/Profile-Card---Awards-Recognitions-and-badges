@@ -1,7 +1,7 @@
 #requires -Version 7.0
 <#
 .SYNOPSIS
-    Step 3 - Synchronizes Microsoft Learn certifications and Credly badges into
+    Step 3 - Synchronizes Microsoft Learn certifications, Applied Skills and Credly badges into
     the existing Microsoft 365 People Data Connector using centralized JSON configuration.
 
 .DESCRIPTION
@@ -32,7 +32,9 @@
 
     Synchronization behavior:
       Microsoft Learn
-        -> active certifications
+        -> active certifications -> personCertifications
+        -> Applied Skills -> microsoftAppliedSkills (custom)
+        -> Applied Skills -> personAwards (Profile Card projection)
       Credly
         -> public/accepted badges within configured rolling window
       Then
@@ -48,7 +50,7 @@
     Sync-MSLearnCredlyPeopleProfiles-v1.ps1 while externalizing configuration.
 
 .CONFIGURATION
-    Expected SchemaVersion: 2.3 or later.
+    Expected SchemaVersion: 2.4 or later.
 
     Default path:
       .\Config\MSLearnPeopleConnector.json
@@ -73,8 +75,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-# Step 3 publishes properties introduced by the SchemaVersion 2.3 contract.
-$MinimumSupportedSchemaVersionText = "2.3"
+# Step 3 publishes properties introduced by the SchemaVersion 2.4 contract.
+$MinimumSupportedSchemaVersionText = "2.4"
 $MinimumSupportedSchemaVersion = [version]$MinimumSupportedSchemaVersionText
 
 # ---------------------------------------------------------------------------
@@ -95,7 +97,17 @@ if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
     $ConfigPath = Join-Path $ScriptDirectory "Config\MSLearnPeopleConnector.json"
 }
 else {
-    $ConfigPath = [System.IO.Path]::GetFullPath($ConfigPath)
+    if ([System.IO.Path]::IsPathRooted($ConfigPath)) {
+        $ConfigPath = [System.IO.Path]::GetFullPath($ConfigPath)
+    }
+    else {
+        # Resolve explicit relative paths from the script root rather than the
+        # process/.NET working directory (which can be C:\Windows\System32).
+        $ConfigPath =
+            [System.IO.Path]::GetFullPath(
+                (Join-Path $ScriptDirectory $ConfigPath)
+            )
+    }
 }
 
 $script:TranscriptStarted = $false
@@ -169,7 +181,8 @@ function Get-RequiredPropertyValue {
 
 function Get-OptionalPropertyValue {
     param(
-        [Parameter(Mandatory)]
+        [Parameter()]
+        [AllowNull()]
         $Object,
 
         [Parameter(Mandatory)]
@@ -1282,6 +1295,51 @@ function Get-MSLearnProfile {
             }
         )
 
+    $AppliedSkillsData =
+        Get-OptionalPropertyValue `
+            -Object $Transcript `
+            -Name "appliedSkillsData"
+
+    # Applied Skills are optional. Profiles without appliedSkillsData must
+    # continue through the normal Learn certification and Credly pipeline.
+    $AppliedSkillsRaw =
+        @()
+
+    if ($null -ne $AppliedSkillsData) {
+        $AppliedSkillsRaw =
+            @(
+                Get-OptionalPropertyValue `
+                    -Object $AppliedSkillsData `
+                    -Name "appliedSkillsCredentials"
+            )
+    }
+
+    $AppliedSkills =
+        @(
+            foreach ($Skill in @($AppliedSkillsRaw)) {
+                if ($null -eq $Skill) {
+                    continue
+                }
+
+                [PSCustomObject]@{
+                    Name =
+                        Get-OptionalPropertyValue `
+                            -Object $Skill `
+                            -Name "title"
+
+                    CredentialNumber =
+                        Get-OptionalPropertyValue `
+                            -Object $Skill `
+                            -Name "credentialId"
+
+                    DateEarned =
+                        Get-OptionalPropertyValue `
+                            -Object $Skill `
+                            -Name "awardedOn"
+                }
+            }
+        )
+
     $Affiliations =
         @(
             Get-OptionalPropertyValue `
@@ -1338,6 +1396,9 @@ function Get-MSLearnProfile {
 
         ActiveCertifications =
             $ActiveCertifications
+
+        AppliedSkills =
+            $AppliedSkills
 
         RawProfile =
             $Profile
@@ -1402,6 +1463,63 @@ function Convert-LearnCertToProfileObject {
     }
 
     return [PSCustomObject]$Result
+}
+
+
+function Convert-ToSingleLineText {
+    param($Value)
+
+    if ($null -eq $Value) {
+        return ""
+    }
+
+    return (([string]$Value) -replace "[\r\n]+", " ").Trim()
+}
+
+function Convert-LearnAppliedSkillToCustomString {
+    param(
+        [Parameter(Mandatory)]
+        $Skill,
+
+        [Parameter(Mandatory)]
+        [string]$TranscriptUrl
+    )
+
+    $IssuedDate =
+        Convert-ToProfileDate -Value $Skill.DateEarned
+
+    $Lines = @(
+        "credentialType: Microsoft Applied Skills"
+        "displayName: $(Convert-ToSingleLineText -Value $Skill.Name)"
+        "credentialId: $(Convert-ToSingleLineText -Value $Skill.CredentialNumber)"
+        "issuedDate: $IssuedDate"
+        "issuingAuthority: Microsoft"
+        "source: Microsoft Learn"
+        "credentialUrl: $(Convert-ToSingleLineText -Value $TranscriptUrl)"
+    )
+
+    return ($Lines -join "`n")
+}
+
+function Convert-LearnAppliedSkillToAwardObject {
+    param(
+        [Parameter(Mandatory)]
+        $Skill,
+
+        [Parameter(Mandatory)]
+        [string]$TranscriptUrl
+    )
+
+    $IssuedDate =
+        Convert-ToProfileDate -Value $Skill.DateEarned
+
+    return [PSCustomObject][ordered]@{
+        displayName      = "Microsoft Applied Skills: $([string]$Skill.Name)"
+        description      = "$($script:AppliedSkillManagedDescription); Credential ID: $([string]$Skill.CredentialNumber)"
+        issuedDate       = $IssuedDate
+        issuingAuthority = "Microsoft"
+        webUrl           = $TranscriptUrl
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -2124,7 +2242,7 @@ try {
             -Name "ContentCategory" `
             -Path "Connector")
 
-    # SchemaVersion 2.3 stores the portable schema at the root level. Step 3
+    # SchemaVersion 2.4 stores the portable schema at the root level. Step 3
     # resolves property names from semantic labels instead of hardcoding them.
     $ConnectorSchema =
         Get-RequiredPropertyValue `
@@ -2143,6 +2261,11 @@ try {
                 Label        = "personCertifications"
                 ExpectedType = "stringCollection"
                 ScriptName   = "CertificationPropertyName"
+            }
+            [PSCustomObject]@{
+                Label        = "personAwards"
+                ExpectedType = "stringCollection"
+                ScriptName   = "AppliedSkillsAwardsPropertyName"
             }
             [PSCustomObject]@{
                 Label        = "title"
@@ -2212,6 +2335,39 @@ try {
 
         $ExpectedSchemaProperties += $SchemaProperty
     }
+
+    # Schema 2.4 custom property used for Search/Copilot semantics.
+    $AppliedSkillsSchemaProperty =
+        Get-RequiredPropertyValue `
+            -Object $ConnectorSchema `
+            -Name "AppliedSkillsProperty" `
+            -Path "Schema"
+
+    $script:AppliedSkillsPropertyName =
+        [string](Get-RequiredPropertyValue `
+            -Object $AppliedSkillsSchemaProperty `
+            -Name "Name" `
+            -Path "Schema.AppliedSkillsProperty")
+
+    $AppliedSkillsPropertyType =
+        [string](Get-RequiredPropertyValue `
+            -Object $AppliedSkillsSchemaProperty `
+            -Name "Type" `
+            -Path "Schema.AppliedSkillsProperty")
+
+    if (
+        -not $AppliedSkillsPropertyType.Equals(
+            "stringCollection",
+            [System.StringComparison]::OrdinalIgnoreCase
+        )
+    ) {
+        throw (
+            "Schema.AppliedSkillsProperty '$($script:AppliedSkillsPropertyName)' uses type " +
+            "'$AppliedSkillsPropertyType'; expected 'stringCollection'."
+        )
+    }
+
+    $ExpectedSchemaProperties += $AppliedSkillsSchemaProperty
 
     # Step 0 intentionally keeps ACL implementation details out of the portable
     # configuration. Use the People connector ACL behavior validated by v1 unless
@@ -2344,6 +2500,35 @@ try {
     $script:LearnManagedDescription =
         if ([string]::IsNullOrWhiteSpace([string]$Value)) {
             "Microsoft certification synchronized from Microsoft Learn"
+        }
+        else {
+            [string]$Value
+        }
+
+    $Value =
+        Get-OptionalPropertyValue `
+            -Object $LearnConfig `
+            -Name "PublishAppliedSkills"
+
+    $script:PublishAppliedSkills =
+        if ($null -eq $Value) { $true } else { [bool]$Value }
+
+    $Value =
+        Get-OptionalPropertyValue `
+            -Object $LearnConfig `
+            -Name "PublishAppliedSkillsAsAwards"
+
+    $script:PublishAppliedSkillsAsAwards =
+        if ($null -eq $Value) { $true } else { [bool]$Value }
+
+    $Value =
+        Get-OptionalPropertyValue `
+            -Object $LearnConfig `
+            -Name "AppliedSkillManagedDescription"
+
+    $script:AppliedSkillManagedDescription =
+        if ([string]::IsNullOrWhiteSpace([string]$Value)) {
+            "Microsoft Applied Skills credential synchronized from Microsoft Learn"
         }
         else {
             [string]$Value
@@ -2935,6 +3120,15 @@ try {
             $LearnCertObjects =
                 @()
 
+            $LearnAppliedSkills =
+                @()
+
+            $AppliedSkillCustomStrings =
+                @()
+
+            $AppliedSkillAwardObjects =
+                @()
+
             $LearnNames =
                 @{}
 
@@ -2957,6 +3151,7 @@ try {
                 Write-Host "    MCID                  : $($Learn.CertificationProfile.MCID)"
                 Write-Host "    MVP affiliation       : $($Learn.Profile.IsMvp)"
                 Write-Host "    Active certifications : $($Learn.ActiveCertifications.Count)"
+                Write-Host "    Applied Skills        : $($Learn.AppliedSkills.Count)"
 
                 $LearnCertObjects =
                     @(
@@ -2984,6 +3179,41 @@ try {
                             $ProfileCert
                         }
                     )
+
+                if ($script:PublishAppliedSkills) {
+
+                    $LearnAppliedSkills =
+                        @($Learn.AppliedSkills)
+
+                    $AppliedSkillCustomStrings =
+                        @(
+                            foreach ($Skill in $LearnAppliedSkills) {
+                                Convert-LearnAppliedSkillToCustomString `
+                                    -Skill $Skill `
+                                    -TranscriptUrl $TranscriptUrl
+                            }
+                        )
+
+                    if ($script:PublishAppliedSkillsAsAwards) {
+                        $AppliedSkillAwardObjects =
+                            @(
+                                foreach ($Skill in $LearnAppliedSkills) {
+
+                                    $AwardObject =
+                                        Convert-LearnAppliedSkillToAwardObject `
+                                            -Skill $Skill `
+                                            -TranscriptUrl $TranscriptUrl
+
+                                    Write-Host (
+                                        "      [Applied Skill] " +
+                                        $Skill.Name
+                                    ) -ForegroundColor DarkCyan
+
+                                    $AwardObject
+                                }
+                            )
+                    }
+                }
             }
             elseif (-not $script:LearnEnabled) {
                 Write-Host "  Microsoft Learn: disabled in configuration."
@@ -3352,7 +3582,9 @@ try {
 
             Write-Host ""
             Write-Host "  Merge summary:"
-            Write-Host "    Learn active             : $($LearnCertObjects.Count)"
+            Write-Host "    Learn certifications     : $($LearnCertObjects.Count)"
+            Write-Host "    Learn Applied Skills     : $($LearnAppliedSkills.Count)"
+            Write-Host "    Applied Skills awards    : $($AppliedSkillAwardObjects.Count)"
             Write-Host "    Credly recent            : $($CredlyBadges.Count)"
             Write-Host "    Credly skipped as Learn  : $CredlySkippedDuplicates"
             Write-Host "    Added                    : $Added"
@@ -3372,6 +3604,16 @@ try {
                     foreach ($CredentialObject in $FinalObjects) {
 
                         $CredentialObject |
+                            ConvertTo-Json `
+                                -Depth 10 `
+                                -Compress
+                    }
+                )
+
+            $AppliedSkillAwardStrings =
+                @(
+                    foreach ($AwardObject in $AppliedSkillAwardObjects) {
+                        $AwardObject |
                             ConvertTo-Json `
                                 -Depth 10 `
                                 -Compress
@@ -3451,6 +3693,22 @@ try {
             $ItemProperties[$script:CertificationPropertyName] =
                 $CertificationStrings
 
+            $ItemProperties[
+                "$($script:AppliedSkillsPropertyName)@odata.type"
+            ] =
+                "Collection(String)"
+
+            $ItemProperties[$script:AppliedSkillsPropertyName] =
+                $AppliedSkillCustomStrings
+
+            $ItemProperties[
+                "$($script:AppliedSkillsAwardsPropertyName)@odata.type"
+            ] =
+                "Collection(String)"
+
+            $ItemProperties[$script:AppliedSkillsAwardsPropertyName] =
+                $AppliedSkillAwardStrings
+
             $ItemProperties[$script:TitlePropertyName] =
                 $ItemTitle
 
@@ -3469,6 +3727,8 @@ try {
             Write-Host "    URL                   : $ItemSourceUrl"
             Write-Host "    Last modified by      : $ItemModifiedBy"
             Write-Host "    Last modified UTC     : $ItemModifiedDateTimeText"
+            Write-Host "    Applied Skills custom : $($AppliedSkillCustomStrings.Count)"
+            Write-Host "    Applied Skills awards : $($AppliedSkillAwardStrings.Count)"
 
             $ExternalItem =
                 @{
@@ -3539,6 +3799,34 @@ try {
 
                 if ($null -eq $ReadBackProperties) {
                     throw "External item validation failed after PUT: properties were not returned."
+                }
+
+                foreach ($CollectionValidation in @(
+                    [PSCustomObject]@{
+                        Name     = $script:AppliedSkillsPropertyName
+                        Expected = $AppliedSkillCustomStrings.Count
+                    }
+                    [PSCustomObject]@{
+                        Name     = $script:AppliedSkillsAwardsPropertyName
+                        Expected = $AppliedSkillAwardStrings.Count
+                    }
+                )) {
+                    if ($CollectionValidation.Expected -gt 0) {
+                        $ActualCollection =
+                            @(
+                                Get-OptionalPropertyValue `
+                                    -Object $ReadBackProperties `
+                                    -Name $CollectionValidation.Name
+                            )
+
+                        if ($ActualCollection.Count -ne $CollectionValidation.Expected) {
+                            throw (
+                                "External item validation failed after PUT: collection " +
+                                "'$($CollectionValidation.Name)' returned $($ActualCollection.Count) " +
+                                "item(s); expected $($CollectionValidation.Expected)."
+                            )
+                        }
+                    }
                 }
 
                 foreach ($SemanticValidation in @(
@@ -3644,6 +3932,12 @@ try {
                     LearnActive =
                         $LearnCertObjects.Count
 
+                    LearnAppliedSkills =
+                        $LearnAppliedSkills.Count
+
+                    AppliedSkillAwards =
+                        $AppliedSkillAwardObjects.Count
+
                     CredlyRecent =
                         $CredlyBadges.Count
 
@@ -3705,6 +3999,12 @@ try {
                     LearnActive =
                         0
 
+                    LearnAppliedSkills =
+                        0
+
+                    AppliedSkillAwards =
+                        0
+
                     CredlyRecent =
                         0
 
@@ -3758,6 +4058,8 @@ try {
         Format-Table `
             UserPrincipalName,
             LearnActive,
+            LearnAppliedSkills,
+            AppliedSkillAwards,
             CredlyRecent,
             CredlySkipped,
             Existing,

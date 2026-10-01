@@ -61,12 +61,12 @@ function Resolve-OperationalConfigPath {
         return $Resolved
     }
 
-    $BetaPath = Join-Path $PSScriptRoot "Config\MSLearnPeopleConnector.beta.json"
-    if (-not (Test-Path -LiteralPath $BetaPath -PathType Leaf)) {
-        throw "Beta configuration was not found: $BetaPath. Use -ConfigPath only for another Schema 2.4 Beta operational path."
+    $OperationalConfigPath = Join-Path $PSScriptRoot "Config\MSLearnPeopleConnector.json"
+    if (-not (Test-Path -LiteralPath $OperationalConfigPath -PathType Leaf)) {
+        throw "Production configuration was not found: $OperationalConfigPath. Use -ConfigPath only for another Schema 2.4 operational path."
     }
 
-    return $BetaPath
+    return $OperationalConfigPath
 }
 
 function Resolve-OperationalPath {
@@ -598,13 +598,13 @@ function Select-ValidationMode {
 }
 
 try {
-    Write-Section 'STEP 99b - Beta Schema 2.4 population validation'
+    Write-Section 'STEP 99 - Schema 2.4 population validation'
 
     $ConfigPath = Resolve-OperationalConfigPath $ConfigPath
     $Config = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
 
     if ([string]$Config.SchemaVersion -ne '2.4') {
-        throw "Step 99b requires SchemaVersion 2.4. Current value: '$($Config.SchemaVersion)'."
+        throw "Step 99 requires SchemaVersion 2.4. Current value: '$($Config.SchemaVersion)'."
     }
 
     $Application = Get-RequiredPropertyValue $Config 'Application' 'root'
@@ -621,10 +621,6 @@ try {
     $GraphV1 = [string](Get-RequiredPropertyValue $Graph 'GraphV1' 'MicrosoftGraph')
     $GraphBeta = [string](Get-RequiredPropertyValue $Graph 'GraphBeta' 'MicrosoftGraph')
     $ConnectionId = [string](Get-RequiredPropertyValue $Connector 'ConnectionId' 'Connector')
-
-    if ($ConnectionId -notmatch 'beta') {
-        throw "Step 99b requires an isolated Beta connection ID. Current value: '$ConnectionId'."
-    }
 
     $CsvPathValue = Get-OptionalPropertyValue $UserSource 'CsvPath'
     if ([string]::IsNullOrWhiteSpace([string]$CsvPathValue)) {

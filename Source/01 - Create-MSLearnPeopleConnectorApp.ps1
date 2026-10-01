@@ -15,7 +15,7 @@
         Config\MSLearnPeopleConnector.json
 
     Step 1 therefore DOES NOT recreate that JSON. It accepts compatible
-    SchemaVersion 2.2 or later configurations, validates the required sections,
+    SchemaVersion 2.4 configurations, validates the required sections,
     creates new Entra application objects when required, or reuses and reconciles
     the configured application when it already exists. It updates only the
     sections owned by this step:
@@ -69,7 +69,7 @@
 
 .EXAMPLE
     & '.\01 - Create-MSLearnPeopleConnectorApp.ps1' `
-        -DisplayName 'Contoso Credential Profile Connector' `
+        -DisplayName 'M365 Profile Card Awards Connector' `
         -SecretValidityMonths 6
 
 .NOTES
@@ -131,9 +131,9 @@ $GraphPowerShellClientId = '14d82eec-204b-4c2f-b7e8-296a70dab67e'
 # Step 1 consumes only the application/authentication portions of the centralized
 # configuration. It must not be tightly coupled to the current Step 0 schema
 # version as long as the minimum contract it needs remains available.
-$MinimumSupportedSchemaVersionText = '2.2'
+$MinimumSupportedSchemaVersionText = '2.4'
 $MinimumSupportedSchemaVersion = [version]$MinimumSupportedSchemaVersionText
-$CurrentStep0SchemaVersionText = '2.3'
+$CurrentStep0SchemaVersionText = '2.4'
 
 $BootstrapScopes = @(
     'Application.ReadWrite.All'
@@ -964,7 +964,7 @@ function Wait-ServicePrincipal {
 Write-Host ''
 Write-Host 'Microsoft Learn / Credly -> Microsoft 365 People Profile' -ForegroundColor White
 Write-Host 'STEP 1 - Create or Validate Entra App Registration / Service Principal' -ForegroundColor White
-Write-Host 'Centralized configuration merge - SchemaVersion 2.2+' -ForegroundColor DarkGray
+Write-Host 'Centralized configuration merge - SchemaVersion 2.4+' -ForegroundColor DarkGray
 
 try {
     # -------------------------------------------------------------------------
@@ -1314,12 +1314,11 @@ application is intentional.
         $AppId = [string]$app.AppId
 
         if ([string]$app.DisplayName -ne $DisplayName) {
-            Write-WarnMessage (
-                "Configured application display name '$DisplayName' differs from the " +
-                "actual App Registration name '$($app.DisplayName)'. Using the existing application."
-            )
-
-            $DisplayName = [string]$app.DisplayName
+            Update-MgApplication `
+                -ApplicationId $AppObjectId `
+                -DisplayName $DisplayName `
+                -ErrorAction Stop
+            Write-Success "App Registration branding reconciled: $DisplayName"
         }
 
         $PermissionMerge =
@@ -1389,6 +1388,13 @@ application is intentional.
     }
 
     $ServicePrincipalId = [string]$servicePrincipal.Id
+    if ([string]$servicePrincipal.DisplayName -ne $DisplayName) {
+        Update-MgServicePrincipal `
+            -ServicePrincipalId $ServicePrincipalId `
+            -DisplayName $DisplayName `
+            -ErrorAction Stop
+        Write-Success "Service Principal branding reconciled: $DisplayName"
+    }
     Write-Success "Service Principal ready: $ServicePrincipalId"
 
     # -------------------------------------------------------------------------
@@ -1684,6 +1690,7 @@ application is intentional.
 
     Write-Host ''
     Write-WarnMessage 'Authentication.ClientSecret is currently stored in clear text in the centralized JSON.'
+    Write-Host 'Branding icon: use Assets/Branding/main/m365-profile-card-awards-docs-256.png in the Entra application Branding & properties page.' -ForegroundColor Cyan
     Write-Host 'Next step: run Step 2 to reconcile the People Data Connector and external schema.' -ForegroundColor Cyan
 }
 catch {

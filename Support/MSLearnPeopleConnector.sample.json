@@ -1,5 +1,5 @@
 {
-  "SchemaVersion": "2.3",
+  "SchemaVersion": "2.4",
   "CreatedUtc": "",
   "LastUpdatedUtc": "",
   "Application": {
@@ -58,6 +58,18 @@
         "personCertifications"
       ]
     },
+    "AppliedSkillsProperty": {
+      "Name": "microsoftAppliedSkills",
+      "Type": "stringCollection",
+      "Description": "Microsoft Applied Skills credentials earned by the person. Scenario-based Microsoft credentials distinct from Microsoft Certifications."
+    },
+    "AppliedSkillsAwardsProperty": {
+      "Name": "appliedSkillsAwards",
+      "Type": "stringCollection",
+      "Labels": [
+        "personAwards"
+      ]
+    },
     "TitleProperty": {
       "Name": "title",
       "Type": "string",
@@ -98,7 +110,11 @@
   "CredentialSources": {
     "MicrosoftLearn": {
       "Enabled": true,
-      "Locale": "en-us"
+      "Locale": "en-us",
+      "PublishActiveCertificationsOnly": true,
+      "PublishAppliedSkills": true,
+      "PublishAppliedSkillsAsAwards": true,
+      "AppliedSkillManagedDescription": "Microsoft Applied Skills credential synchronized from Microsoft Learn"
     },
     "Credly": {
       "Enabled": true,
@@ -135,6 +151,7 @@
     "PeopleDataSources": "https://learn.microsoft.com/en-us/graph/people-data-sources",
     "LearnCredentialSharing": "https://learn.microsoft.com/en-us/credentials/certifications/view-use-share-certificates-badges",
     "ExternalConnectorPropertySemanticLabels": "https://learn.microsoft.com/en-us/graph/api/resources/externalconnectors-property?view=graph-rest-beta",
-    "UpdateExternalConnectionSchema": "https://learn.microsoft.com/en-us/graph/api/externalconnectors-externalconnection-patch-schema?view=graph-rest-1.0"
+    "UpdateExternalConnectionSchema": "https://learn.microsoft.com/en-us/graph/api/externalconnectors-externalconnection-patch-schema?view=graph-rest-1.0",
+    "AppliedSkills": "https://learn.microsoft.com/en-us/credentials/applied-skills/"
   }
 }

@@ -58,8 +58,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 # Step 2 is schema-aware and requires the semantic metadata introduced by Step 0
-# SchemaVersion 2.3.
-$MinimumSupportedSchemaVersionText = "2.3"
+# SchemaVersion 2.4.
+$MinimumSupportedSchemaVersionText = "2.4"
 $MinimumSupportedSchemaVersion = [version]$MinimumSupportedSchemaVersionText
 
 # ---------------------------------------------------------------------------
@@ -247,6 +247,15 @@ function Convert-ActualSchemaPropertyToBody {
         type = [string](Get-BagValue -Object $Property -Name "type")
     }
 
+    if (Test-BagHasValue -Object $Property -Name "description") {
+        $DescriptionValue =
+            [string](Get-BagValue -Object $Property -Name "description")
+
+        if (-not [string]::IsNullOrWhiteSpace($DescriptionValue)) {
+            $Body["description"] = $DescriptionValue
+        }
+    }
+
     foreach ($AttributeName in @(
         "isSearchable",
         "isRetrievable",
@@ -315,6 +324,20 @@ function Get-SchemaDifferences {
 
         if ($DesiredType -ine $ActualType) {
             $Differences += "Property '$DesiredName' type is '$ActualType'; expected '$DesiredType'."
+        }
+
+        if (Test-BagHasValue -Object $DesiredProperty -Name "description") {
+            $DesiredDescription =
+                [string](Get-BagValue -Object $DesiredProperty -Name "description")
+
+            $ActualDescription =
+                [string](Get-BagValue -Object $ActualProperty -Name "description")
+
+            if ($DesiredDescription -ne $ActualDescription) {
+                $Differences += (
+                    "Property '$DesiredName' description does not match the configured SchemaVersion contract."
+                )
+            }
         }
 
         if (Test-BagHasValue -Object $DesiredProperty -Name "labels") {
@@ -776,7 +799,7 @@ try {
     # Connector schema
     # -----------------------------------------------------------------------
 
-    # SchemaVersion 2.3 keeps the schema at the root level and allows Step 0
+    # SchemaVersion 2.4 keeps the schema at the root level and allows Step 0
     # to add new schema property definitions without requiring Step 2 code changes.
 
     $Schema =
@@ -823,6 +846,15 @@ try {
         $PropertyBody = [ordered]@{
             name = $PropertyName
             type = $PropertyType
+        }
+
+        $Description =
+            [string](Get-OptionalConfigProperty `
+                -Object $Property `
+                -PropertyName "Description")
+
+        if (-not [string]::IsNullOrWhiteSpace($Description)) {
+            $PropertyBody["description"] = $Description
         }
 
         $Labels = Get-OptionalConfigProperty -Object $Property -PropertyName "Labels"
@@ -897,6 +929,7 @@ try {
     foreach ($RequiredLabel in @(
         "personAccount",
         "personCertifications",
+        "personAwards",
         "title",
         "url",
         "lastModifiedBy",
@@ -916,7 +949,7 @@ try {
     # Profile source
     # -----------------------------------------------------------------------
 
-    # SchemaVersion 2.3 keeps profile-source settings directly under Connector.
+    # SchemaVersion 2.4 keeps profile-source settings directly under Connector.
 
     $ProfileSourceKind =
         [string](Get-ConfigProperty `
@@ -1511,10 +1544,11 @@ try {
         }
 
     Write-Host ""
+    Write-Host "Production connector icon: Assets/Branding/main/m365-profile-card-awards-copilot-48.png (apply in the connector administration UI)." -ForegroundColor Cyan
     Write-Host "Copilot visibility:" -ForegroundColor Cyan
     Write-Host "  Recommended value     : On"
     Write-Host "  Automation status     : Not configured through the current Microsoft Graph contract"
-    Write-Host "  Post-deployment action: Microsoft 365 admin center > Copilot > Connectors > Your connections > Copilot Visibility > On" -ForegroundColor Yellow
+    Write-Host "  Post-deployment action: Microsoft 365 admin center > Copilot > Connectors > Your connections > $ConnectionName > Copilot Visibility > On" -ForegroundColor Yellow
     Write-Host ""
     Write-Success "Step 2 completed. No user/test data was inserted."
 
