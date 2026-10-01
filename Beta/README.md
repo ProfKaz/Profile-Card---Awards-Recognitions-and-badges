@@ -44,11 +44,13 @@ Then run the full Beta test:
 The full test:
 
 1. Resolves the local branding asset or downloads and validates the published image.
-2. Downloads the existing Entra application logo when one is available.
+2. Reads the supported read-only `Application.Info.LogoUrl` and downloads the existing logo for backup when one is available.
 3. Applies the Beta asset with `Set-MgApplicationLogo`.
-4. Downloads the stored logo again.
-5. Requires its SHA-256 to match the submitted image.
+4. Refreshes `logoUrl` and retries the CDN download briefly after the update.
+5. Requires the downloaded image SHA-256 to match the submitted image.
 6. Prints a restore command when a previous logo was backed up.
+
+The binary application `logo` property is not read directly because Graph can return `Request_UnsupportedQuery`; retrieval uses the generated `logoUrl` instead.
 
 Backups and verification files are written under the configured `Output.ReportsDirectory/Branding` path. Use `-BackupDirectory` to select another location. `-WhatIf` is also supported.
 

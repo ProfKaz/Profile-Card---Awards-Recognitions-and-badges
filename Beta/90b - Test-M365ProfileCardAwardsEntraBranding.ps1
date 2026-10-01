@@ -227,7 +227,7 @@ function Resolve-ConfiguredApplication {
     if (-not [string]::IsNullOrWhiteSpace($ConfiguredObjectId)) {
         $Application = Get-MgApplication `
             -ApplicationId $ConfiguredObjectId `
-            -Property 'Id,AppId,DisplayName' `
+            -Property 'Id,AppId,DisplayName,Info' `
             -ErrorAction Stop
 
         if (
@@ -249,7 +249,7 @@ function Resolve-ConfiguredApplication {
 
     $Application = Get-MgApplication `
         -Filter "appId eq '$ConfiguredClientId'" `
-        -Property 'Id,AppId,DisplayName' `
+        -Property 'Id,AppId,DisplayName,Info' `
         -ErrorAction Stop |
         Select-Object -First 1
 
@@ -446,30 +446,39 @@ try {
         "ApplicationLogo-before-$Timestamp.png"
 
     $PreviousLogoBackedUp = $false
+    $CurrentLogoUrl = [string]$Application.Info.LogoUrl
 
-    try {
-        Get-MgApplicationLogo `
-            -ApplicationId ([string]$Application.Id) `
-            -OutFile $PreviousLogoPath `
-            -ErrorAction Stop
-
-        if ((Test-Path -LiteralPath $PreviousLogoPath) -and (Get-Item $PreviousLogoPath).Length -gt 0) {
-            $PreviousLogoBackedUp = $true
-            Write-Success "Existing application logo backed up: $PreviousLogoPath"
-        }
+    if ([string]::IsNullOrWhiteSpace($CurrentLogoUrl)) {
+        Write-InfoMessage 'The application does not currently expose a logoUrl; no backup file was created.'
     }
-    catch {
-        if (-not (Test-GraphNotFoundError -ErrorRecord $_)) {
+    else {
+        try {
+            Invoke-WebRequest `
+                -Uri $CurrentLogoUrl `
+                -OutFile $PreviousLogoPath `
+                -Headers @{ 'Cache-Control' = 'no-cache' } `
+                -MaximumRedirection 5 `
+                -ErrorAction Stop
+
+            if (
+                -not (Test-Path -LiteralPath $PreviousLogoPath) -or
+                (Get-Item -LiteralPath $PreviousLogoPath).Length -eq 0
+            ) {
+                throw 'The logoUrl request returned an empty backup file.'
+            }
+
+            $PreviousLogoBackedUp = $true
+            Write-Success "Existing application logo backed up from logoUrl: $PreviousLogoPath"
+        }
+        catch {
+            if (Test-Path -LiteralPath $PreviousLogoPath) {
+                Remove-Item -LiteralPath $PreviousLogoPath -Force -ErrorAction SilentlyContinue
+            }
+
             throw (
-                'The current logo could not be read. This may indicate missing permission or a Graph error. ' +
+                'The current application logoUrl was found, but its content could not be backed up. ' +
                 $_.Exception.Message
             )
-        }
-
-        Write-InfoMessage 'No existing application logo was returned; no backup file was created.'
-
-        if (Test-Path -LiteralPath $PreviousLogoPath) {
-            Remove-Item -LiteralPath $PreviousLogoPath -Force -ErrorAction SilentlyContinue
         }
     }
 
@@ -493,29 +502,78 @@ try {
             $BackupDirectory `
             "ApplicationLogo-verified-$Timestamp.png"
 
-        Get-MgApplicationLogo `
-            -ApplicationId ([string]$Application.Id) `
-            -OutFile $VerificationPath `
-            -ErrorAction Stop
+        $VerificationSucceeded = $false
+        $RetrievedHash = $null
+        $VerificationLogoUrl = $null
+        $VerificationAttempts = 6
 
-        if (-not (Test-Path -LiteralPath $VerificationPath)) {
-            throw 'Graph did not return a verification logo file after the update.'
+        for ($Attempt = 1; $Attempt -le $VerificationAttempts; $Attempt++) {
+            if ($Attempt -gt 1) {
+                Write-InfoMessage (
+                    "Waiting for logoUrl/CDN propagation before verification " +
+                    "attempt $Attempt of $VerificationAttempts..."
+                )
+                Start-Sleep -Seconds 5
+            }
+
+            $VerificationApplication = Get-MgApplication `
+                -ApplicationId ([string]$Application.Id) `
+                -Property 'Id,Info' `
+                -ErrorAction Stop
+
+            $VerificationLogoUrl = [string]$VerificationApplication.Info.LogoUrl
+
+            if ([string]::IsNullOrWhiteSpace($VerificationLogoUrl)) {
+                continue
+            }
+
+            if (Test-Path -LiteralPath $VerificationPath) {
+                Remove-Item -LiteralPath $VerificationPath -Force
+            }
+
+            try {
+                Invoke-WebRequest `
+                    -Uri $VerificationLogoUrl `
+                    -OutFile $VerificationPath `
+                    -Headers @{ 'Cache-Control' = 'no-cache' } `
+                    -MaximumRedirection 5 `
+                    -ErrorAction Stop
+            }
+            catch {
+                Write-WarnMessage (
+                    "Verification attempt $Attempt could not download logoUrl: " +
+                    $_.Exception.Message
+                )
+                continue
+            }
+
+            if (
+                -not (Test-Path -LiteralPath $VerificationPath) -or
+                (Get-Item -LiteralPath $VerificationPath).Length -eq 0
+            ) {
+                continue
+            }
+
+            $RetrievedHash = (
+                Get-FileHash -LiteralPath $VerificationPath -Algorithm SHA256
+            ).Hash
+
+            if ($RetrievedHash -eq $LogoValidation.Sha256) {
+                $VerificationSucceeded = $true
+                break
+            }
         }
 
-        $RetrievedHash = (
-            Get-FileHash -LiteralPath $VerificationPath -Algorithm SHA256
-        ).Hash
-
-        $HashMatch = $RetrievedHash -eq $LogoValidation.Sha256
-
         Write-Host "Submitted SHA-256 : $($LogoValidation.Sha256)"
-        Write-Host "Retrieved SHA-256 : $RetrievedHash"
+        Write-Host "Retrieved SHA-256 : $(if ($RetrievedHash) { $RetrievedHash } else { 'Not available' })"
+        Write-Host "Verification URL  : $(if ($VerificationLogoUrl) { $VerificationLogoUrl } else { 'Not available' })"
         Write-Host "Verification file : $VerificationPath"
 
-        if (-not $HashMatch) {
+        if (-not $VerificationSucceeded) {
             throw (
-                'The application logo was returned by Graph, but its SHA-256 does not match ' +
-                'the submitted file. Preserve the backup and inspect the returned image.'
+                "The application logo did not match the submitted image after " +
+                "$VerificationAttempts logoUrl/CDN verification attempts. " +
+                'Preserve the previous-logo backup and inspect the URL and downloaded file.'
             )
         }
 
