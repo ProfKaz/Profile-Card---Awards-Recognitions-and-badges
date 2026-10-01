@@ -102,7 +102,8 @@ flowchart LR
 │   └── MSLearnPeopleConnector.sample.json
 ├── Docs/
 │   ├── Copilot-Prompt-Library.md
-│   └── Copilot-Usage-Tips.md
+│   ├── Copilot-Usage-Tips.md
+│   └── People-Profile-Extensibility.md
 └── Assets/
     ├── Branding/
     │   ├── README.md
@@ -136,6 +137,12 @@ A certification is evidence of demonstrated knowledge, not automatic proof of pr
 The complete prompt library is available in **[Docs/Copilot-Prompt-Library.md](Docs/Copilot-Prompt-Library.md)**.
 
 For practical guidance on prompt grounding, model selection, retrieval coverage, expiration analysis, and the difference between semantic discovery and exhaustive reporting, see **[Docs/Copilot-Usage-Tips.md](Docs/Copilot-Usage-Tips.md)**.
+
+## Extending profile data beyond certifications
+
+See **[People Profile Extensibility: Custom Properties, Skills, and Limits](Docs/People-Profile-Extensibility.md)** for the supported native profile catalog, custom-property design, Schema 2.4 Applied Skills mapping, skills serialization, People Skills card behavior, documented quantities and limits, and the changes required to extend provisioning, synchronization and validation.
+
+The guide distinguishes schema properties from collection entries and card-visible fields. It also explains why source precedence does not deduplicate multi-value profile data. Examples beyond the existing Applied Skills implementation are extension patterns, not newly enabled script features.
 
 ## Prerequisites
 
