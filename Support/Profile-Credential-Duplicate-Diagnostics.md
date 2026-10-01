@@ -1,5 +1,8 @@
 # Diagnose duplicate profile credentials before cleanup
 
+The [schema-preserving cleanup utility](Profile-Credential-Cleanup.md) is now available.
+Start with the read-only pilot below, then follow that guide for selected item removal.
+
 Run this read-only pilot for one affected user before deleting data. The script
 compares the known user item in the production and Beta connections with the
 shared Profile API certifications and awards. It never changes the schema,
