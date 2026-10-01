@@ -4,7 +4,7 @@ This preview validates application-logo branding independently before the behavi
 
 ## Files
 
-- `90b - Test-M365ProfileCardAwardsEntraBranding.ps1`: reads the existing operational configuration, validates Microsoft Graph access and applies/verifies the configured App Registration logo.
+- `90b - Test-M365ProfileCardAwardsEntraBranding.ps1`: reads the existing operational configuration, obtains the published branding asset, validates Microsoft Graph access and applies/verifies the configured App Registration logo.
 - `Assets/m365-profile-card-awards-entra-215.png`: Entra-compatible image (215 × 215 PNG, opaque background, under 100 KB).
 
 The test does not modify the JSON configuration, external connection, schema, profile source, user items or Copilot visibility.
@@ -20,7 +20,11 @@ The script resolves `Application.TenantId`, `Application.ApplicationObjectId` an
 
 ## Validation sequence
 
-Keep the script and `Assets` folder together. First run the non-mutating preflight:
+The script can be downloaded and executed without downloading the `Assets` folder. It first checks for `Assets/m365-profile-card-awards-entra-215.png` beside the script. If that file is unavailable, it downloads the published image from this repository to a uniquely named temporary file, validates its SHA-256 and image contract, and removes it in `finally`, including after an error.
+
+Supplying `-LogoPath` continues to require and use that explicit local file instead of downloading the published asset.
+
+First run the non-mutating preflight:
 
 ```powershell
 & '.\Beta\90b - Test-M365ProfileCardAwardsEntraBranding.ps1' `
@@ -39,11 +43,12 @@ Then run the full Beta test:
 
 The full test:
 
-1. Downloads the existing logo when one is available.
-2. Applies the Beta asset with `Set-MgApplicationLogo`.
-3. Downloads the stored logo again.
-4. Requires its SHA-256 to match the submitted image.
-5. Prints a restore command when a previous logo was backed up.
+1. Resolves the local branding asset or downloads and validates the published image.
+2. Downloads the existing Entra application logo when one is available.
+3. Applies the Beta asset with `Set-MgApplicationLogo`.
+4. Downloads the stored logo again.
+5. Requires its SHA-256 to match the submitted image.
+6. Prints a restore command when a previous logo was backed up.
 
 Backups and verification files are written under the configured `Output.ReportsDirectory/Branding` path. Use `-BackupDirectory` to select another location. `-WhatIf` is also supported.
 

@@ -5,8 +5,9 @@
 
 .DESCRIPTION
     Reads the existing production-style MSLearnPeopleConnector.json file to
-    resolve the tenant and application identity, validates the local Entra logo,
-    requests the delegated Microsoft Graph permission required to update the
+    resolve the tenant and application identity, resolves the Entra logo locally
+    or downloads the published asset to a temporary file, and requests the
+    delegated Microsoft Graph permission required to update the
     application, backs up the current application logo when one exists, applies
     the Beta test logo, downloads the stored logo, and validates its SHA-256.
 
@@ -47,7 +48,14 @@ $RequiredScope = 'Application.ReadWrite.All'
 $ExpectedLogoWidth = 215
 $ExpectedLogoHeight = 215
 $MaximumLogoBytes = 100KB
+$DefaultLogoUri = (
+    'https://raw.githubusercontent.com/ProfKaz/' +
+    'Profile-Card---Awards-Recognitions-and-badges/' +
+    'main/Beta/Assets/m365-profile-card-awards-entra-215.png'
+)
+$ExpectedDefaultLogoSha256 = 'FFC0AE7B77B0E4907CC14F57E195D907DEBF77F8CCFA156B84DDA1E03BE57710'
 $script:GraphConnected = $false
+$TemporaryLogoPath = $null
 
 function Write-Step {
     param([Parameter(Mandatory)][string]$Message)
@@ -274,12 +282,46 @@ try {
             -Candidates @($ConfigPath)
     }
 
+    $LogoDownloadedFromWeb = $false
+
     if ([string]::IsNullOrWhiteSpace($LogoPath)) {
-        $LogoPath = Resolve-ExistingFile `
-            -Description 'Beta Entra branding logo' `
-            -Candidates @(
-                (Join-Path $PSScriptRoot 'Assets\m365-profile-card-awards-entra-215.png')
-            )
+        $LocalLogoPath = Join-Path `
+            $PSScriptRoot `
+            'Assets\m365-profile-card-awards-entra-215.png'
+
+        if (Test-Path -LiteralPath $LocalLogoPath -PathType Leaf) {
+            $LogoPath = [string](Resolve-Path -LiteralPath $LocalLogoPath).Path
+            Write-InfoMessage "Using local branding asset: $LogoPath"
+        }
+        else {
+            $TemporaryLogoPath = Join-Path `
+                ([System.IO.Path]::GetTempPath()) `
+                "m365-profile-card-awards-entra-$([guid]::NewGuid().ToString('N')).png"
+
+            Write-InfoMessage 'The branding asset is not available locally.'
+            Write-InfoMessage "Downloading published branding asset: $DefaultLogoUri"
+
+            try {
+                Invoke-WebRequest `
+                    -Uri $DefaultLogoUri `
+                    -OutFile $TemporaryLogoPath `
+                    -MaximumRedirection 5 `
+                    -ErrorAction Stop
+            }
+            catch {
+                if (Test-Path -LiteralPath $TemporaryLogoPath) {
+                    Remove-Item -LiteralPath $TemporaryLogoPath -Force -ErrorAction SilentlyContinue
+                }
+
+                throw (
+                    'The Beta Entra branding logo was not found locally and could not be ' +
+                    "downloaded from '$DefaultLogoUri'. $($_.Exception.Message)"
+                )
+            }
+
+            $LogoPath = $TemporaryLogoPath
+            $LogoDownloadedFromWeb = $true
+        }
     }
     else {
         $LogoPath = Resolve-ExistingFile `
@@ -326,6 +368,17 @@ try {
 
     $LogoValidation = Test-EntraLogoFile -Path $LogoPath
 
+    if (
+        $LogoDownloadedFromWeb -and
+        $LogoValidation.Sha256 -ne $ExpectedDefaultLogoSha256
+    ) {
+        throw (
+            'The downloaded branding asset failed the integrity check. ' +
+            "Expected SHA-256: $ExpectedDefaultLogoSha256. " +
+            "Downloaded SHA-256: $($LogoValidation.Sha256)."
+        )
+    }
+
     Write-Host "Configuration : $ConfigPath"
     Write-Host "Tenant ID     : $TenantId"
     Write-Host "Logo          : $($LogoValidation.Path)"
@@ -333,7 +386,12 @@ try {
     Write-Host "Opaque PNG    : Yes"
     Write-Host "File size     : $($LogoValidation.Length) bytes"
     Write-Host "SHA-256       : $($LogoValidation.Sha256)"
-    Write-Success 'The local Entra logo satisfies the Beta validation contract.'
+    if ($LogoDownloadedFromWeb) {
+        Write-Success 'The downloaded Entra logo passed format and integrity validation.'
+    }
+    else {
+        Write-Success 'The local Entra logo satisfies the Beta validation contract.'
+    }
 
     Write-Step 'STEP 2 - Validate Microsoft Graph modules and delegated permission'
 
@@ -499,5 +557,13 @@ finally {
     if ($script:GraphConnected) {
         Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
         Write-Host 'Microsoft Graph session closed.' -ForegroundColor DarkGray
+    }
+
+    if (
+        -not [string]::IsNullOrWhiteSpace($TemporaryLogoPath) -and
+        (Test-Path -LiteralPath $TemporaryLogoPath)
+    ) {
+        Remove-Item -LiteralPath $TemporaryLogoPath -Force -ErrorAction SilentlyContinue
+        Write-Host 'Temporary branding asset removed.' -ForegroundColor DarkGray
     }
 }
