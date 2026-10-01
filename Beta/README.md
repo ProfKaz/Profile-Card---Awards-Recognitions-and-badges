@@ -1,26 +1,52 @@
-# Beta — upcoming releases
+# Beta — Entra branding validation
 
-<p align="center">
-  <img src="../Assets/Branding/beta/m365-profile-card-awards-beta-512.png" alt="M365 Profile Card Awards Beta shield" width="200">
-</p>
+This preview validates application-logo branding independently before the behavior is added to the production provisioning or migration script.
 
-This folder is reserved for upcoming preview versions of **M365 Profile Card Awards**. New versions will be released here with their corresponding version number, detailed changes, configuration/schema requirements, known limitations, validation instructions and promotion status.
+## Files
 
-## Current status
+- `90b - Test-M365ProfileCardAwardsEntraBranding.ps1`: reads the existing operational configuration, validates Microsoft Graph access and applies/verifies the configured App Registration logo.
+- `Assets/m365-profile-card-awards-entra-215.png`: Entra-compatible image (215 × 215 PNG, opaque background, under 100 KB).
 
-Schema **2.4** was promoted to [Source](../Source/README.md) on **October 1, 2026**. There are currently no preview scripts or configuration samples in this folder. The promoted implementation includes Microsoft Applied Skills, the dual custom-property/award representation, synchronization fixes, branding and the population validator.
+The test does not modify the JSON configuration, external connection, schema, profile source, user items or Copilot visibility.
 
-Use the production scripts in `Source` and the sanitized sample in `Support/MSLearnPeopleConnector.sample.json`. Previous Beta scripts remain available through Git history.
+## Prerequisites
 
-## Future preview release details
+- PowerShell 7 or later.
+- `Microsoft.Graph.Authentication` and `Microsoft.Graph.Applications` installed.
+- An account able to consent to and use delegated `Application.ReadWrite.All` for the configured tenant and application.
+- An existing operational `Config/MSLearnPeopleConnector.json` populated by Steps 00 and 01.
 
-Each preview release will document:
+The script resolves `Application.TenantId`, `Application.ApplicationObjectId` and `Application.ClientId` from that configuration. It rejects an Object ID/Client ID mismatch so the logo cannot silently be applied to another App Registration.
 
-- Version, release date, purpose and changes from production.
-- Script list and execution order.
-- Schema/configuration changes and compatibility requirements.
-- Separate preview application, connection, configuration and user mappings.
-- Validation results, known issues and migration/rollback instructions.
-- Whether it is still under evaluation or has been promoted to production.
+## Validation sequence
 
-The Beta identity and icons remain reserved for preview deployments. Publishing this repository change does not rename, delete or migrate existing tenant connections or their external items. See [the production migration guide](../Source/README.md#upgrade-from-schema-23-or-a-beta-working-directory).
+Keep the script and `Assets` folder together. First run the non-mutating preflight:
+
+```powershell
+& '.\Beta\90b - Test-M365ProfileCardAwardsEntraBranding.ps1' `
+    -ConfigPath '.\Config\MSLearnPeopleConnector.json' `
+    -ValidateOnly
+```
+
+This validates the configuration, image contract, required modules, authenticated tenant, delegated Graph scope and configured application identity. It does not change the logo.
+
+Then run the full Beta test:
+
+```powershell
+& '.\Beta\90b - Test-M365ProfileCardAwardsEntraBranding.ps1' `
+    -ConfigPath '.\Config\MSLearnPeopleConnector.json'
+```
+
+The full test:
+
+1. Downloads the existing logo when one is available.
+2. Applies the Beta asset with `Set-MgApplicationLogo`.
+3. Downloads the stored logo again.
+4. Requires its SHA-256 to match the submitted image.
+5. Prints a restore command when a previous logo was backed up.
+
+Backups and verification files are written under the configured `Output.ReportsDirectory/Branding` path. Use `-BackupDirectory` to select another location. `-WhatIf` is also supported.
+
+## Promotion gate
+
+Do not update Step 01 until the full test succeeds against the intended tenant and the new logo is visible in Entra after normal portal propagation. The Microsoft 365 connector icon remains a separate administrative concern because the public `externalConnection` Graph resource does not expose an icon property.
