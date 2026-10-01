@@ -96,6 +96,24 @@ function Test-GraphNotFoundError {
     )
 }
 
+function Get-ApplicationLogoUrl {
+    param([Parameter(Mandatory)][object]$Application)
+
+    $InfoProperty = $Application.PSObject.Properties['Info']
+
+    if ($null -eq $InfoProperty -or $null -eq $InfoProperty.Value) {
+        return $null
+    }
+
+    $LogoUrlProperty = $InfoProperty.Value.PSObject.Properties['LogoUrl']
+
+    if ($null -eq $LogoUrlProperty) {
+        return $null
+    }
+
+    return [string]$LogoUrlProperty.Value
+}
+
 function Resolve-ExistingFile {
     param(
         [Parameter(Mandatory)][string]$Description,
@@ -446,7 +464,7 @@ try {
         "ApplicationLogo-before-$Timestamp.png"
 
     $PreviousLogoBackedUp = $false
-    $CurrentLogoUrl = [string]$Application.Info.LogoUrl
+    $CurrentLogoUrl = Get-ApplicationLogoUrl -Application $Application
 
     if ([string]::IsNullOrWhiteSpace($CurrentLogoUrl)) {
         Write-InfoMessage 'The application does not currently expose a logoUrl; no backup file was created.'
@@ -521,7 +539,7 @@ try {
                 -Property 'Id,Info' `
                 -ErrorAction Stop
 
-            $VerificationLogoUrl = [string]$VerificationApplication.Info.LogoUrl
+            $VerificationLogoUrl = Get-ApplicationLogoUrl -Application $VerificationApplication
 
             if ([string]::IsNullOrWhiteSpace($VerificationLogoUrl)) {
                 continue
