@@ -197,3 +197,7 @@ and maps:
 The transcript endpoint is a public web endpoint used by this reference implementation and should be monitored for changes.
 
 No files under `/Source` or `/Support` are modified by this beta experiment.
+
+## Extending the pattern
+
+See [People Profile Extensibility: Custom Properties, Skills, and Limits](../Docs/People-Profile-Extensibility.md) for how to reuse this dual representation, add custom properties or native skills, distinguish schema limits from credential counts, and validate People Skills presentation behavior. Adding a configuration key alone does not extend the scripts; update the explicit schema, synchronization and validator contracts together.
