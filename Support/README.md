@@ -134,3 +134,9 @@ The public sample is safe to commit because it contains no operational credentia
 Step 00 is the authoritative generator for the local operational configuration. If an older operational JSON is reused, Step 00 can reconcile missing SchemaVersion 2.3 contract properties while preserving existing operational values and backing up the file before it is changed.
 
 The real local file `Config\MSLearnPeopleConnector.json` can contain confidential authentication data. Protect it as a secret-bearing configuration artifact and exclude it from source control.
+
+
+## Credential maintenance
+
+- [Read-only duplicate diagnostic](Profile-Credential-Duplicate-Diagnostics.md): compare one user across connector sources and the shared profile.
+- [Schema-preserving user item cleanup](Profile-Credential-Cleanup.md): preview or remove selected externalItems, preserve connector schemas, and verify propagation before republishing.
