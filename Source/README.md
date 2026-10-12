@@ -59,6 +59,10 @@ Configured Microsoft Graph application permissions:
 
 The current PoC flow can write the client secret to the local configuration file. That file must be protected and must not be committed to GitHub.
 
+### Troubleshooting an existing connection (HTTP 403)
+
+If Step 02 returns `403 Forbidden / AccessDenied` while reading `GET /external/connections/mslearncred`, even with valid app-only authentication and granted API permissions, the connection may have been created by a different Entra application. **Do not delete the connection automatically.** See the [safe recovery procedure](TROUBLESHOOTING-403-EXISTING-CONNECTION.md) to authorize the current app while preserving existing configuration.
+
 ## Step 02 – People Data Connector
 
 Step 02 is configuration-driven. It loads `Config\MSLearnPeopleConnector.json` and does not embed tenant-specific values in the script.
