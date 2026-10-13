@@ -133,14 +133,14 @@ function Profile-Date($Raw) {
 function Get-Issuer($Badge) {
     $issuer = Get-OptionalValue -Object $Badge -Name 'issuer'
     $entities = Get-OptionalValue -Object $issuer -Name 'entities'
-    $name = @(
+    $names = @(
         foreach ($entry in @($entities)) {
             $entity = Get-OptionalValue -Object $entry -Name 'entity'
             $value = Get-OptionalValue -Object $entity -Name 'name'
-            if ($value) { $value }
+            if ($value) { [string]$value }
         }
-    ) | Select-Object -First 1
-    if ($name.Count) { return [string]$name[0] }
+    )
+    if ($names.Count -gt 0) { return [string]$names[0] }
     return ''
 }
 
