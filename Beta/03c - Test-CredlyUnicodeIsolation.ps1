@@ -46,14 +46,22 @@ if (-not $GraphBase) { throw 'MicrosoftGraph.GraphV1 is required.' }
 if (-not $ConnectionId -or -not $TenantId -or -not $ClientId -or -not $Secret) {
     throw 'Missing Connector.ConnectionId, Application IDs, or Authentication.ClientSecret.'
 }
-$CertProperty = [string]$Config.Schema.CertificationsProperty.Name
-$AccountProperty = [string]$Config.Schema.AccountProperty.Name
+function Get-PropertyByLabel([string]$Label) {
+    $matching = @($Config.Schema.PSObject.Properties | Where-Object {
+        $_.Name -ne 'BaseType' -and $_.Value -and
+        @($_.Value.Labels) -contains $Label
+    })
+    if ($matching.Count -ne 1) { throw "Expected exactly one Schema property with label '$Label', found $($matching.Count)." }
+    return [string]$matching[0].Value.Name
+}
+$CertProperty = Get-PropertyByLabel 'personCertifications'
+$AccountProperty = Get-PropertyByLabel 'personAccount'
 $SkillsProperty = [string]$Config.Schema.AppliedSkillsProperty.Name
-$AwardProperty = [string]$Config.Schema.AppliedSkillsAwardsProperty.Name
-$TitleProperty = [string]$Config.Schema.TitleProperty.Name
-$UrlProperty = [string]$Config.Schema.UrlProperty.Name
-$ModifiedByProperty = [string]$Config.Schema.LastModifiedByProperty.Name
-$ModifiedDateProperty = [string]$Config.Schema.LastModifiedDateTimeProperty.Name
+$AwardProperty = Get-PropertyByLabel 'personAwards'
+$TitleProperty = Get-PropertyByLabel 'title'
+$UrlProperty = Get-PropertyByLabel 'url'
+$ModifiedByProperty = Get-PropertyByLabel 'lastModifiedBy'
+$ModifiedDateProperty = Get-PropertyByLabel 'lastModifiedDateTime'
 foreach ($item in @($CertProperty,$AccountProperty,$SkillsProperty,$AwardProperty,$TitleProperty,$UrlProperty,$ModifiedByProperty,$ModifiedDateProperty)) {
     if ([string]::IsNullOrWhiteSpace($item)) { throw 'Missing a required Schema 2.4 property in configuration.' }
 }
@@ -94,7 +102,8 @@ function Profile-Date($Raw) {
 }
 function Get-Issuer($Badge) {
     $name = @($Badge.issuer.entities | ForEach-Object { $_.entity.name } | Where-Object { $_ } | Select-Object -First 1)
-    return if ($name.Count) { [string]$name[0] } else { '' }
+    if ($name.Count) { return [string]$name[0] }
+    return ''
 }
 
 $ProfileBase = [string]$Config.CredentialSources.Credly.ProfileBaseUrl
@@ -170,7 +179,9 @@ foreach ($User in $Users) {
         }
     )
     $ObjectId = ([guid]$User.EntraObjectId).ToString('N')
-    $ItemId = "u$ObjectId"
+    $IdPrefix = [string]$Config.Synchronization.ExternalItemIdPrefix
+    if (-not $IdPrefix) { $IdPrefix = 'u' }
+    $ItemId = "$IdPrefix$ObjectId"
     $Props = [ordered]@{}
     $Props[$AccountProperty] = (@{
         userPrincipalName = [string]$User.UserPrincipalName
