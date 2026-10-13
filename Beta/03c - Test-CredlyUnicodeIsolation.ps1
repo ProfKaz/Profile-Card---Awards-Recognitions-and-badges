@@ -31,6 +31,14 @@ $Culture = [Globalization.CultureInfo]::InvariantCulture
 $ScriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Root = Split-Path -Parent $ScriptRoot
 if (-not $ConfigPath) { $ConfigPath = Join-Path $Root 'Config/MSLearnPeopleConnector.json' }
+# Resolve relative paths from the caller's current PowerShell directory, not the process working directory.
+# The default config remains anchored at the solution root.
+if (-not [IO.Path]::IsPathFullyQualified($ConfigPath)) {
+    $ConfigPath = Join-Path (Get-Location).Path $ConfigPath
+}
+if (-not [IO.Path]::IsPathFullyQualified($UsersCsv)) {
+    $UsersCsv = Join-Path (Get-Location).Path $UsersCsv
+}
 $ConfigPath = [IO.Path]::GetFullPath($ConfigPath)
 $UsersCsv = [IO.Path]::GetFullPath($UsersCsv)
 if (-not (Test-Path -LiteralPath $ConfigPath)) { throw "Configuration missing: $ConfigPath" }
@@ -48,8 +56,10 @@ if (-not $ConnectionId -or -not $TenantId -or -not $ClientId -or -not $Secret) {
 }
 function Get-PropertyByLabel([string]$Label) {
     $matching = @($Config.Schema.PSObject.Properties | Where-Object {
-        $_.Name -ne 'BaseType' -and $_.Value -and
-        @($_.Value.Labels) -contains $Label
+        if ($_.Name -eq 'BaseType' -or $null -eq $_.Value) { return $false }
+        $LabelsProperty = $_.Value.PSObject.Properties['Labels']
+        if ($null -eq $LabelsProperty -or $null -eq $LabelsProperty.Value) { return $false }
+        return @($LabelsProperty.Value) -contains $Label
     })
     if ($matching.Count -ne 1) { throw "Expected exactly one Schema property with label '$Label', found $($matching.Count)." }
     return [string]$matching[0].Value.Name
@@ -68,6 +78,14 @@ foreach ($item in @($CertProperty,$AccountProperty,$SkillsProperty,$AwardPropert
 $Allowed = @('WithoutU200B','OnlyU200B','Normalized')
 $Users = @(Import-Csv -LiteralPath $UsersCsv -Encoding utf8)
 if ($Users.Count -ne 3) { throw 'The CSV must contain exactly three test user rows.' }
+$RequiredColumns = @('Scenario','UserPrincipalName','EntraObjectId')
+$AvailableColumns = if ($Users.Count -gt 0) { @($Users[0].PSObject.Properties.Name) } else { @() }
+$MissingColumns = @($RequiredColumns | Where-Object { $_ -notin $AvailableColumns })
+if ($MissingColumns.Count -gt 0) {
+    throw ("Incorrect test mapping CSV. Required columns: Scenario,UserPrincipalName,EntraObjectId. " +
+        "Missing: $($MissingColumns -join ', '). The regular CredentialUsers.csv or CredentialUsers-Sample.csv " +
+        "cannot be used here; create Data/CredlyUnicodeTestUsers.csv instead.")
+}
 if (@($Users.Scenario | Sort-Object -Unique).Count -ne 3) { throw 'Scenarios must be unique.' }
 foreach ($Scenario in $Allowed) {
     if ($Scenario -notin @($Users.Scenario)) { throw "Missing scenario: $Scenario" }
@@ -240,7 +258,10 @@ try {
             $e = $_
             if ($e.Exception.Message -match 'already exists') { throw }
             $status = $null
-            if ($e.Exception.Response) { $status = [int]$e.Exception.Response.StatusCode }
+            $responseProperty = $e.Exception.PSObject.Properties['Response']
+            if ($null -ne $responseProperty -and $null -ne $responseProperty.Value) {
+                $status = [int]$responseProperty.Value.StatusCode
+            }
             if ($status -ne 404) { throw }
         }
     }
