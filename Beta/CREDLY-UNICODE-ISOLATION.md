@@ -27,14 +27,17 @@ OnlyU200B,usuario.conunicode@example.com,22222222-2222-4222-8222-222222222222
 Normalized,usuario.normalizado@example.com,33333333-3333-4333-8333-333333333333
 ```
 
-Replace example UPNs and GUIDs with real identities.
+Replace example UPNs and GUIDs with real identities. **Do not use the production `CredentialUsers.csv` or `CredentialUsers-Sample.csv`**: they use a different set of headers and serve a different purpose. The beta test accepts exactly three rows with the three headers shown above.
 
 ## Run
 
-Download this script into a `Beta` subfolder under the **same working directory** where `Config/MSLearnPeopleConnector.json` exists.
+Download this script into a `Beta` subfolder under the **same working directory** where `Config/MSLearnPeopleConnector.json` exists. Relative paths for `-UsersCsv` are resolved from the current PowerShell directory; the default configuration path is resolved from the script's parent solution folder.
 
 ```powershell
-# Always preview first (no Graph sign-in or writes)
+# Run while your prompt is in the solution's Beta folder:
+# & '.\\03c - Test-CredlyUnicodeIsolation.ps1' -UsersCsv '..\\Data\\CredlyUnicodeTestUsers.csv'
+
+# Or, from the solution root, always preview first (no Graph sign-in or writes)
 & '.\Beta\03c - Test-CredlyUnicodeIsolation.ps1' -UsersCsv '.\Data\CredlyUnicodeTestUsers.csv'
 
 # Only after reviewing the preview, publish the three test externalItems
@@ -67,3 +70,7 @@ The PUT/read-back confirms connector storage, **not** Microsoft 365 profile mate
 - Partial materialization: compare exactly which certification IDs appeared.
 
 Do not remove Unicode formatting in production until evidence supports a change. This experiment is deliberately diagnostic, not a permanent policy for badges.
+
+## Fix: relative CSV path and Schema.Labels errors
+
+The first beta revision used .NET's process working directory to resolve relative `-UsersCsv` paths; this could unexpectedly turn `..\\Data\\...` into `C:\\Users\\Data\\...`. This is corrected: relative CSV paths now use the current PowerShell location. The schema label resolver previously assumed every schema entry had a `Labels` property; `AppliedSkillsProperty` and other custom properties can legitimately omit it. The resolver now safely skips unlabeled properties under PowerShell strict mode. The script also reports a specific error if a standard Step 03 CSV is supplied instead of the required three-row beta mapping.
