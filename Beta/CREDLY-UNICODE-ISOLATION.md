@@ -74,3 +74,7 @@ Do not remove Unicode formatting in production until evidence supports a change.
 ## Fix: relative CSV path and Schema.Labels errors
 
 The first beta revision used .NET's process working directory to resolve relative `-UsersCsv` paths; this could unexpectedly turn `..\\Data\\...` into `C:\\Users\\Data\\...`. This is corrected: relative CSV paths now use the current PowerShell location. The schema label resolver previously assumed every schema entry had a `Labels` property; `AppliedSkillsProperty` and other custom properties can legitimately omit it. The resolver now safely skips unlabeled properties under PowerShell strict mode. The script also reports a specific error if a standard Step 03 CSV is supplied instead of the required three-row beta mapping.
+
+## Fix: optional Credly configuration under PowerShell StrictMode
+
+If the preview fails with `The property 'ProfileBaseUrl' cannot be found`, the configuration has intentionally omitted an optional value. The beta test now uses the same defaults as the production Step 03: `ProfileBaseUrl = https://www.credly.com/users` and `BadgesEndpointSuffix = badges.json`. Optional `Synchronization.ExternalItemIdPrefix` defaults to `u`. Optional badge fields (`expires_at_date`, `earner_path`, `image_url`, and issuer entity nesting) are read safely without changing the raw Credly JSON. **Do not add these optional properties to the production configuration solely to work around beta errors.**
