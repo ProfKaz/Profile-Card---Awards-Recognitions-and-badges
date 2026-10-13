@@ -54,6 +54,18 @@ if (-not $GraphBase) { throw 'MicrosoftGraph.GraphV1 is required.' }
 if (-not $ConnectionId -or -not $TenantId -or -not $ClientId -or -not $Secret) {
     throw 'Missing Connector.ConnectionId, Application IDs, or Authentication.ClientSecret.'
 }
+# StrictMode-safe access for optional entries in both configuration and Credly JSON.
+function Get-OptionalValue {
+    param($Object, [Parameter(Mandatory)][string]$Name)
+    if ($null -eq $Object) { return $null }
+    if ($Object -is [System.Collections.IDictionary]) {
+        if ($Object.Contains($Name)) { return $Object[$Name] }
+        return $null
+    }
+    $prop = $Object.PSObject.Properties[$Name]
+    if ($null -eq $prop) { return $null }
+    return $prop.Value
+}
 function Get-PropertyByLabel([string]$Label) {
     $matching = @($Config.Schema.PSObject.Properties | Where-Object {
         if ($_.Name -eq 'BaseType' -or $null -eq $_.Value) { return $false }
@@ -119,14 +131,24 @@ function Profile-Date($Raw) {
     return $parsed.ToString('yyyy-MM-dd',$Culture)
 }
 function Get-Issuer($Badge) {
-    $name = @($Badge.issuer.entities | ForEach-Object { $_.entity.name } | Where-Object { $_ } | Select-Object -First 1)
+    $issuer = Get-OptionalValue -Object $Badge -Name 'issuer'
+    $entities = Get-OptionalValue -Object $issuer -Name 'entities'
+    $name = @(
+        foreach ($entry in @($entities)) {
+            $entity = Get-OptionalValue -Object $entry -Name 'entity'
+            $value = Get-OptionalValue -Object $entity -Name 'name'
+            if ($value) { $value }
+        }
+    ) | Select-Object -First 1
     if ($name.Count) { return [string]$name[0] }
     return ''
 }
 
-$ProfileBase = [string]$Config.CredentialSources.Credly.ProfileBaseUrl
+$CredlySettings = Get-OptionalValue -Object $Config.CredentialSources -Name 'Credly'
+if ($null -eq $CredlySettings) { throw 'Missing CredentialSources.Credly configuration.' }
+$ProfileBase = [string](Get-OptionalValue -Object $CredlySettings -Name 'ProfileBaseUrl')
 if (-not $ProfileBase) { $ProfileBase = 'https://www.credly.com/users' }
-$Suffix = [string]$Config.CredentialSources.Credly.BadgesEndpointSuffix
+$Suffix = [string](Get-OptionalValue -Object $CredlySettings -Name 'BadgesEndpointSuffix')
 if (-not $Suffix) { $Suffix = 'badges.json' }
 $Base = $ProfileBase.TrimEnd('/')
 $CredlyUrl = "$Base/$([uri]::EscapeDataString($CredlyUser))"
@@ -135,19 +157,21 @@ $Response = Invoke-RestMethod -Uri $Uri -Method GET -Headers @{
     Accept = 'application/json'
     'User-Agent' = 'Mozilla/5.0 (compatible; CredentialProfileSync/3.1)'
 } -ErrorAction Stop
-if ($null -eq $Response.data) { throw "Credly response missing data at $Uri" }
+$ResponseData = Get-OptionalValue -Object $Response -Name 'data'
+if ($null -eq $ResponseData) { throw "Credly response missing data at $Uri" }
 $FetchedAt = [datetimeoffset]::UtcNow
 $Cutoff = (Get-Date).Date.AddMonths(-12)
 $Candidates = @()
-foreach ($Badge in @($Response.data)) {
-    if ([string]$Badge.state -ne 'accepted' -or $Badge.public -ne $true) { continue }
-    $Issued = Profile-Date $Badge.issued_at_date
+foreach ($Badge in @($ResponseData)) {
+    if ([string](Get-OptionalValue -Object $Badge -Name 'state') -ne 'accepted' -or
+        (Get-OptionalValue -Object $Badge -Name 'public') -ne $true) { continue }
+    $Issued = Profile-Date (Get-OptionalValue -Object $Badge -Name 'issued_at_date')
     if (-not $Issued) { continue }
     if ([datetime]::ParseExact($Issued,'yyyy-MM-dd',$Culture) -lt $Cutoff) { continue }
-    $Name = [string]$Badge.badge_template.name
+    $Name = [string](Get-OptionalValue -Object (Get-OptionalValue -Object $Badge -Name 'badge_template') -Name 'name')
     $Issuer = Get-Issuer $Badge
-    if (-not $Badge.id -or -not $Name -or -not $Issuer) {
-        throw "Incomplete eligible badge: $($Badge.id). Stop rather than silently dropping a record."
+    if (-not (Get-OptionalValue -Object $Badge -Name 'id') -or -not $Name -or -not $Issuer) {
+        throw "Incomplete eligible badge: $(Get-OptionalValue -Object $Badge -Name 'id'). Stop rather than silently dropping a record."
     }
     $Candidates += $Badge
 }
@@ -158,7 +182,7 @@ $Prepared = @()
 foreach ($User in $Users) {
     $Scenario = [string]$User.Scenario
     $Selected = @($Candidates | Where-Object {
-        $has = ([string]$_.badge_template.name).Contains([char]0x200B)
+        $has = ([string](Get-OptionalValue -Object (Get-OptionalValue -Object $_ -Name 'badge_template') -Name 'name')).Contains([char]0x200B)
         switch ($Scenario) {
             'WithoutU200B' { -not $has }
             'OnlyU200B'    { $has }
@@ -167,7 +191,7 @@ foreach ($User in $Users) {
     })
     $BadgeStrings = @(
         foreach ($Badge in $Selected) {
-            $Name = [string]$Badge.badge_template.name
+            $Name = [string](Get-OptionalValue -Object (Get-OptionalValue -Object $Badge -Name 'badge_template') -Name 'name')
             $Issuer = Get-Issuer $Badge
             $Description = "Credly badge synchronized from public profile - $Name"
             if ($Scenario -eq 'Normalized') {
@@ -175,10 +199,10 @@ foreach ($User in $Users) {
                 $Issuer = Normalize-Text $Issuer
                 $Description = Normalize-Text $Description
             }
-            $IssueDate = Profile-Date $Badge.issued_at_date
-            $EndDate = Profile-Date $Badge.expires_at_date
+            $IssueDate = Profile-Date (Get-OptionalValue -Object $Badge -Name 'issued_at_date')
+            $EndDate = Profile-Date (Get-OptionalValue -Object $Badge -Name 'expires_at_date')
             $record = [ordered]@{
-                certificationId = "credly:$($Badge.id)"
+                certificationId = "credly:$(Get-OptionalValue -Object $Badge -Name 'id')"
                 displayName = $Name
                 description = $Description
                 issuedDate = $IssueDate
@@ -187,17 +211,18 @@ foreach ($User in $Users) {
                 issuingCompany = $Issuer
             }
             if ($EndDate) { $record.endDate = $EndDate }
-            $Path = [string]$Badge.earner_path
+            $Path = [string](Get-OptionalValue -Object $Badge -Name 'earner_path')
             if ($Path) {
                 $Origin = ([uri]$ProfileBase).GetLeftPart([uriPartial]::Authority)
                 $record.webUrl = if ($Path -match '^https?://') { $Path } else { "$Origin/$($Path.TrimStart('/'))" }
             }
-            if ($Badge.image_url) { $record.thumbnailUrl = [string]$Badge.image_url }
+            $ImageUrl = Get-OptionalValue -Object $Badge -Name 'image_url'
+            if ($ImageUrl) { $record.thumbnailUrl = [string]$ImageUrl }
             ConvertTo-Json -InputObject $record -Depth 10 -Compress
         }
     )
     $ObjectId = ([guid]$User.EntraObjectId).ToString('N')
-    $IdPrefix = [string]$Config.Synchronization.ExternalItemIdPrefix
+    $IdPrefix = [string](Get-OptionalValue -Object $Config.Synchronization -Name 'ExternalItemIdPrefix')
     if (-not $IdPrefix) { $IdPrefix = 'u' }
     $ItemId = "$IdPrefix$ObjectId"
     $Props = [ordered]@{}
@@ -223,7 +248,7 @@ foreach ($User in $Users) {
     $Prepared += [pscustomobject]@{ Scenario=$Scenario; UPN=$User.UserPrincipalName; ItemId=$ItemId; Uri="$ItemBase/$ItemId"; Body=$Payload; Count=$BadgeStrings.Count }
     $Summaries += [pscustomobject]@{
         Scenario = $Scenario; UPN = $User.UserPrincipalName; Badges = $Selected.Count
-        U200BNames = @($Selected | Where-Object { ([string]$_.badge_template.name).Contains([char]0x200B) }).Count
+        U200BNames = @($Selected | Where-Object { ([string](Get-OptionalValue -Object (Get-OptionalValue -Object $_ -Name 'badge_template') -Name 'name')).Contains([char]0x200B) }).Count
     }
 }
 Write-Host "Source: $Uri"
