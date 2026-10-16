@@ -99,8 +99,23 @@ if ($MissingColumns.Count -gt 0) {
         "Missing: $($MissingColumns -join ', '). The regular CredentialUsers.csv or CredentialUsers-Sample.csv " +
         "cannot be used here; create Data/CredlyIssuerTestUsers.csv instead.")
 }
-if (@($Users | Where-Object {
-    ([string]$_.UserPrincipalName) -match '(?i)@example\.com { throw 'Scenarios must be unique.' }
+# Reject placeholder data before any Graph request.
+$PlaceholderGuids = @(
+    '11111111-1111-4111-8111-111111111111',
+    '22222222-2222-4222-8222-222222222222',
+    '33333333-3333-4333-8333-333333333333',
+    '44444444-4444-4444-8444-444444444444'
+)
+$ExampleRows = @($Users | Where-Object {
+    ([string]$_.UserPrincipalName) -match '@example\.com$' -or
+    ([string]$_.EntraObjectId) -in $PlaceholderGuids
+})
+if ($ExampleRows.Count -gt 0) {
+    throw 'CSV contains template identities. Replace each UPN and EntraObjectId with a real dedicated test user.'
+}
+if (@($Users.Scenario | Sort-Object -Unique).Count -ne 4) {
+    throw 'Scenarios must be unique.'
+}
 foreach ($Scenario in $Allowed) {
     if ($Scenario -notin @($Users.Scenario)) { throw "Missing scenario: $Scenario" }
 }
